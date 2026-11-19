@@ -2,8 +2,11 @@
 
 Ensure both of these hold:
 
-- The hooks in the adjacent `shared-hooks.json` are *merged* into ~/.claude/settings.json.
-- `~/.claude/hooks/block-selfkill.sh`, which the `PreToolUse` hook in that file runs, exists. Link it to
+Below, `$CLAUDE_CONFIG_DIR` is Claude Code's config folder: the value of that variable when it is set,
+`~/.claude` otherwise.
+
+- The hooks in the adjacent `shared-hooks.json` are *merged* into `$CLAUDE_CONFIG_DIR/settings.json`.
+- `$CLAUDE_CONFIG_DIR/hooks/block-selfkill.sh`, which the `PreToolUse` hook in that file runs, exists. Link it to
     the adjacent `block-selfkill.sh` (`ln -s`) so there is one copy. The script needs `jq`.
 
 # Killing processes
@@ -71,7 +74,7 @@ When it's used:
 
 # Message timestamps
 
-A hook in `~/.claude/settings.json` adds `Now (Chicago): Oct 29, 8:10 AM` after every prompt
+A hook in `$CLAUDE_CONFIG_DIR/settings.json` adds `Now (Chicago): Oct 29, 8:10 AM` after every prompt
 and every tool call.
 
 - Start every message to me, progress notes included, with the time from the most recent of
