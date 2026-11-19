@@ -72,6 +72,65 @@ When it's used:
 - When I come back after I tell you I will be away: Questions hit while I am gone get
     saved and opened as a walk thru on my return, so they don't block the work.
 
+# PR terms
+
+"Confirm" and "cleanup" are what to do once a PR is merged; "confirm and cleanup" means both, in
+that order. Squash is the only merge strategy, so a PR lands as one flat commit, and work branches
+take the target in with merge commits (never a rebase) so line comments on their PRs aren't orphaned.
+
+## Confirm
+
+Check that the expected code (not commits) made it to the target branch.
+
+- The target is the PR's base repository and branch (`gh pr view`), fetched fresh from the remote that
+    points at that repository, whatever it is called locally; never a fork's copy, which can be stale.
+- Look only at the PR's squash commit (`gh pr view --json mergeCommit`), ignoring anything merged after
+    it, and compare changes, not files: the squash commit's diff from its parent must equal the branch's
+    diff from the last target commit it took in.
+
+```
+            A   B   C   D   E   F   G
+ master  ---o---o---o---o---o---o---o
+             \           \         / (squash)
+  work        o---o-------o-------/
+              X   Y       Z (merge)
+```
+
+- The work branch started at A, made X and Y, and took in D with the merge Z. E and F landed on master
+    after that, and the squash made G on top of F.
+- G's diff from its parent (F to G) is only the branch's work: E and F were already in F.
+- G's files do hold E and F, and Z's don't, so comparing the files of G and Z would show E and F as
+    differences though the work landed intact. That's why the check compares diffs.
+- The branch's diff runs from the last master commit it took in, D (`git merge-base Z F`), to its tip,
+    Z. Confirmed when the two diffs match:
+    `git diff F G | git patch-id --stable` equals `git diff D Z | git patch-id --stable`.
+    When the branch was up to date at the squash (no E or F), the files of G and Z also match exactly.
+- Any other difference: stop, report it (with the files), and ask before cleanup.
+
+## Cleanup
+
+Only after confirm passes, in this order:
+
+1. Switch to the local target branch.
+2. Fast-forward it from the target remote (`--ff-only`). If it can't fast-forward because it has commits
+    of its own, stop and report: never merge or reset it.
+3. Update the submodules (`git submodule update --init`).
+4. Delete every copy of the PR's head branch: the local branch (`git branch -D`: after a squash git
+    doesn't see it as merged; confirm is what makes the force safe), the branch on the remote the PR
+    came from unless GitHub already deleted it, and any worktree checked out on it.
+5. Fast-forward the fork's branch of the same name to the target by pushing it there (fast-forward
+    only, no force), so nothing later reads a stale copy. If it can't fast-forward, stop and report.
+    Skip this when there is no fork.
+6. Clean up what the merged work left behind:
+    - files made only for it: scratch scripts, stand-ins, probe output, logs;
+    - the project's own temp-file cleanup script, if it has one;
+    - background tasks, containers or VMs started for it that still run; shared ones follow the
+        project's own rule.
+    Never caches, images, VM disks, or anything shared or tracked by git. If unsure whether something
+    belonged to the work or is still needed, ask.
+7. Update memory and handoff notes that call the PR open or pending: merged, with its squash commit.
+    Don't close or edit issues on GitHub; say which ones look ready to close.
+
 # Message timestamps
 
 A hook in `$CLAUDE_CONFIG_DIR/settings.json` adds `Now (Chicago): Oct 29, 8:10 AM` after every prompt
