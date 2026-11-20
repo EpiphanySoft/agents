@@ -1,6 +1,6 @@
 # Hooks
 
-Ensure both of these hold:
+Ensure all of these hold:
 
 Below, `$CLAUDE_CONFIG_DIR` is Claude Code's config folder: the value of that variable when it is set,
 `~/.claude` otherwise.
@@ -8,6 +8,8 @@ Below, `$CLAUDE_CONFIG_DIR` is Claude Code's config folder: the value of that va
 - The hooks in the adjacent `shared-hooks.json` are *merged* into `$CLAUDE_CONFIG_DIR/settings.json`.
 - `$CLAUDE_CONFIG_DIR/hooks/block-selfkill.sh`, which the `PreToolUse` hook in that file runs, exists. Link it to
     the adjacent `block-selfkill.sh` (`ln -s`) so there is one copy. The script needs `jq`.
+- `$CLAUDE_CONFIG_DIR/skills/<name>` exists for each adjacent `skills/<name>` folder. Link it to that folder
+    (`ln -s`) so there is one copy.
 
 # Killing processes
 
@@ -71,6 +73,14 @@ When it's used:
 - For any batch of decisions that need to be made.
 - When I come back after I tell you I will be away: Questions hit while I am gone get
     saved and opened as a walk thru on my return, so they don't block the work.
+
+# Relay
+
+A relay is a coordinating session handing fixed batches of a large, uniform job to one agent at a time.
+The adjacent `skills/relay` skill describes how to run one.
+
+- A relay runs only when I ask for one for that piece of work.
+- Choices that are mine, such as a walk thru's questions, stay with the coordinator, never an agent.
 
 # PR terms
 
