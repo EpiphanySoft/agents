@@ -34,9 +34,9 @@ to the outcomes the counts below name.>
 
 1. <The touched files' tests, run whole: the exact command.>
 2. <Formatting and lint: the exact command. If it reformats, run 1 again.>
-3. <The batch's own check, such as a mutation run on the batch's names: the exact command,
-    how long it takes, and that it runs as a background command whose own completion is waited
-    for, never by a loop that searches the process list.>
+3. <The batch's own check, such as the tool that found the items run on just the batch's items:
+    the exact command, how long it takes, and that it runs as a background command whose own
+    completion is waited for, never by a loop that searches the process list.>
 
 ## Commit and report
 
