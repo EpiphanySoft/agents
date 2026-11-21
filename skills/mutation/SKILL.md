@@ -26,6 +26,11 @@ always settles one way. The examples here use mutmut, a Python tool; its words (
 | not run | the job ended first (out of time, stopped) | run in a later round; a baseline has none |
 | other | ended any other way (a crash, a tool error) | looked into, each one |
 
+**Unsteady outcomes.** A change whose outcome differs between two runs of the same code (killed in
+one, survived in the other) shows a test that isn't reliable, often one that depends on timing: it
+catches the change only sometimes. It is a finding, filed like a bug, and looked into before its
+area's survivors are settled.
+
 ## Runs
 
 - **Never in the checkout.** The tool rewrites the code it tests, so a run works in a copy, laid out
@@ -80,9 +85,11 @@ Committed, one set per area, in a folder the project names:
     committed, see below).
 - **`survivors/<area>.json`**: one survivor a line, in the module's order: its name, file, function,
     line, and the lines it removed and added. A job stopped before it wrote its diffs leaves names
-    alone; gathering makes those diffs again from the tool's own changes to the checkout (no tests
-    run), for modules still as the run saw them. A survivor with no line (its lines appear more than
-    once in its function, or not at all) is found by its name.
+    alone; gathering makes those diffs again from the tool's own changes to the module's code as the
+    run mutated it (the blob its record names, whatever the checkout holds now), with no tests run:
+    the same code and the same tool version make the same changes under the same names. A survivor
+    with no line (its lines appear more than once in its function, or not at all) is found by its
+    name.
 - **`<area>.json`**, the settled record, written after the settled run: its outcomes and content, the
     pull request that settled the area, the issues it found and the equivalents it left.
 
