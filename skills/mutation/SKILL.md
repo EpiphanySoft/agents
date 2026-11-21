@@ -26,6 +26,11 @@ always settles one way. The examples here use mutmut, a Python tool; its words (
 | not run | the job ended first (out of time, stopped) | run in a later round; a baseline has none |
 | other | ended any other way (a crash, a tool error) | looked into, each one |
 
+**Unsteady outcomes.** A change whose outcome differs between two runs of the same code (killed in
+one, survived in the other) shows a test that isn't reliable, often one that depends on timing: it
+catches the change only sometimes. It is a finding, filed like a bug, and looked into before its
+area's survivors are settled.
+
 ## Runs
 
 - **Never in the checkout.** The tool rewrites the code it tests, so a run works in a copy, laid out
