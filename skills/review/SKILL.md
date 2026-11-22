@@ -112,6 +112,7 @@ coordinator checks). Each piece's work is committed before the next piece starts
 | `decisions.md` | the coordinator | each agreed resolution, after its walk thru's final approval |
 | `unit-<nn>-<name>.md` | Phase 2 | a unit's brief, claims, verdicts and what was found while checking ([template](unit-template.md)) |
 | `sweep.md` | the sweep | the verdicts on what was found while checking |
+| `exploitable.json` | the coordinator | the ids of the claims flagged exploitable if public |
 | `questions.md` | the coordinator | unattended: questions that could not be filed, and those that must stay private |
 | `findings.jsonl`, `summary.json` | filing | the records the filing script reads ([filing.md](filing.md)) |
 | `filing-dry-run.md`, `filing-state.json` | the script | the dry run the owner reads, and what was posted |
@@ -229,6 +230,11 @@ A project may add kinds of its own. A claim has its id, kind, severity, requirem
 untraced), file and line with the quoted lines, what goes wrong as a concrete case where there is one,
 the remedy, and alternatives where there are reasonable ones. It says how it was run, or that it rests
 on reading alone.
+
+**Exploitable if public.** The unit session flags any security or privacy claim that would be
+exploitable if public, from the moment it is made, and the coordinator adds its id to the work pad's
+`exploitable.json`. The checker may change the flag, as a correction. The flag keeps a question about
+the claim private, and sets how it is filed (*Filing*).
 
 **The second blind run.** Where the choices call for one, a second discovery run reads the same unit
 from the same brief, blind to the first, on its own model. Its claims join the unit's file under their
@@ -381,15 +387,16 @@ right, so the next review need not repeat it); and *where things stand* (what wa
 lightly, and where to start). Steps, sub-issues under steps and project-board fields belong to the
 project's planning, not the review.
 
-**Exploitable findings.** The dry run marks each finding that would be exploitable if public (a
-security or privacy flaw) to be filed as a private draft security advisory instead of a public issue.
-The owner confirms or changes each mark at the read. The summary gives only their count.
+**Exploitable findings.** A finding flagged exploitable if public (a security or privacy flaw)
+is filed as a private draft security advisory instead of a public issue. The dry run shows each
+finding's mark, and the owner confirms or changes each one at the read. The summary gives only their
+count.
 
 **The script.** `file_review.py`, in this folder, files a review from `findings.jsonl` and
 `summary.json` in the work pad and the project's `docs/review.json` ([filing.md](filing.md)):
 
 1. The filing pass (a model, see *Models and effort*) writes the two records from the work pad:
-    every surviving claim, its issue text, its area, its mark, and the summary.
+    every surviving claim, its issue text, its area, its exploitable mark, and the summary.
 2. `file_review.py dry-run` writes every issue and advisory it would make to `filing-dry-run.md` and
     posts nothing. The owner reads it.
 3. `file_review.py post` posts exactly what the dry run showed, text-checking each body first,

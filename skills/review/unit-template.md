@@ -40,10 +40,12 @@ it goes, and the checker adds a verdict beside each.
 - **Remedy**: <what would fix it>
 - **Alternatives**: <other reasonable remedies, or none>
 - **Reading** (unattended, when it hangs on an open question): <question issue>, reading <A | B>
+- **Exploitable if public**: yes | no (a security or privacy claim only; yes adds its id to
+    `exploitable.json`)
 - **Second run**: <the id of the same claim from the other blind run, if it found it too>
 
-**Verdict** (the checker's): confirmed | corrected: <what changed> | plausible: <the question> |
-rejected: <the reason>. **Confirmations**: <n>.
+**Verdict** (the checker's): confirmed | corrected: <what changed, the exploitable flag included> |
+plausible: <the question> | rejected: <the reason>. **Confirmations**: <n>.
 
 ## Found while checking
 

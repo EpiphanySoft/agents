@@ -100,7 +100,7 @@ class FileReviewTest(unittest.TestCase):
         self.findings = [
             finding("U01-1", "A value on the limit is dropped."),
             finding("U01-2", "A forged token is accepted.", kind="security", severity="High",
-                    advisory=True),
+                    exploitable=True),
             finding("D1-1", "Two documents give different timeouts.", kind="differs",
                     area="docs", code=[], question=True),
         ]
@@ -160,6 +160,29 @@ class FileReviewTest(unittest.TestCase):
         text = (self.pad / "filing-dry-run.md").read_text()
         self.assertIn("- labels: review, area:core, kind:bug\n", text)
         self.assertIn("- labels: review, area:docs, kind:differs, question\n", text)
+
+    def test_advisory_follows_the_mark_unless_set(self):
+        self.run_script("dry-run")
+        text = (self.pad / "filing-dry-run.md").read_text()
+        self.assertIn("## 2. U01-2: draft security advisory, private, severity high", text)
+        self.assertIn("- exploitable if public: yes\n", text)
+        self.assertEqual(text.count("- exploitable if public: no\n"), 2)
+        # The owner changes a mark at the read: advisory overrides it, and the dry run says so.
+        self.findings[1]["advisory"] = False
+        self.findings[0]["advisory"] = True
+        self.write_inputs()
+        self.run_script("dry-run")
+        text = (self.pad / "filing-dry-run.md").read_text()
+        self.assertIn("## 1. U01-1: draft security advisory", text)
+        self.assertIn("## 2. U01-2: public issue", text)
+        self.assertIn("filed as a public issue anyway (`advisory: false`)", text)
+        self.assertIn("filed as an advisory anyway (`advisory: true`)", text)
+
+    def test_dry_run_flags_a_mark_lost_since_the_review(self):
+        (self.pad / "exploitable.json").write_text(json.dumps(["U01-2", "U01-1"]))
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        text = (self.pad / "filing-dry-run.md").read_text()
+        self.assertIn("Check the marks: U01-1 flagged in `exploitable.json`", text)
 
     def test_body_starts_with_severity_and_holds_the_finding(self):
         self.run_script("dry-run")

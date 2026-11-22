@@ -30,6 +30,7 @@ DRY_RUN_FILE = "filing-dry-run.md"
 STATE_FILE = "filing-state.json"
 FINDINGS_FILE = "findings.jsonl"
 SUMMARY_FILE = "summary.json"
+EXPLOITABLE_FILE = "exploitable.json"
 CHECK_FILE = ".text-check.md"
 
 SEVERITY_FOR_ADVISORY = {"High": "high", "Med": "medium", "Low": "low"}
@@ -69,6 +70,7 @@ FINDING_SCHEMA = {
         "decision": _TEXT,
         "confirmations": {"type": "integer", "minimum": 0},
         "question": {"type": "boolean"},
+        "exploitable": {"type": "boolean"},
         "advisory": {"type": "boolean"},
     },
 }
@@ -188,6 +190,20 @@ def load_findings(pad):
         seen.add(record["id"])
         findings.append(record)
     return findings
+
+
+EXPLOITABLE_SCHEMA = {"type": "array", "items": FINDING_SCHEMA["properties"]["id"],
+                      "uniqueItems": True}
+
+
+def load_exploitable(pad):
+    """The claim ids the review has flagged exploitable if public, from exploitable.json."""
+    path = pad / EXPLOITABLE_FILE
+    if not path.exists():
+        return set()
+    ids = load_json(path, "exploitable")
+    check_schema(ids, EXPLOITABLE_SCHEMA, EXPLOITABLE_FILE)
+    return set(ids)
 
 
 def load_summary(pad):
@@ -316,16 +332,21 @@ def build_plan(config, pad):
     findings = load_findings(pad)
     summary = load_summary(pad)
     areas = list_areas(config)
+    flagged = load_exploitable(pad)
     items = []
     for f in findings:
         if f["area"] is not None and f["area"] not in areas:
             raise Refused(f"{FINDINGS_FILE} {f['id']}.area: {f['area']!r} is not one of the "
                           f"project's areas ({', '.join(sorted(areas)) or 'none listed'})")
         body = finding_body(config, f)
-        if f.get("advisory"):
+        exploitable = f.get("exploitable", False)
+        mark = {"exploitable": exploitable,
+                "advisory_set": "advisory" in f and f["advisory"] != exploitable,
+                "unflagged": f["id"] in flagged and not exploitable}
+        if f.get("advisory", exploitable):
             items.append({"id": f["id"], "type": "advisory", "title": f["title"], "body": body,
                           "labels": [], "severity": SEVERITY_FOR_ADVISORY[f["severity"]],
-                          "finding": f})
+                          "mark": mark, "finding": f})
             continue
         labels = list(config["labels"])
         if f["area"] is not None:
@@ -335,7 +356,7 @@ def build_plan(config, pad):
         if f.get("question"):
             labels.append(config["question_label"])
         items.append({"id": f["id"], "type": "issue", "title": f["title"], "body": body,
-                      "labels": list(dict.fromkeys(labels)), "finding": f})
+                      "labels": list(dict.fromkeys(labels)), "mark": mark, "finding": f})
     return {
         "repo": config["repo"],
         "items": items,
@@ -375,12 +396,15 @@ def write_dry_run(config, pad, plan, failures):
     else:
         out.append("Text check: passed for every title and body.")
     out.append("")
+    unflagged = [i["id"] for i in plan["items"] if i["mark"]["unflagged"]]
+    if unflagged:
+        out += [f"Check the marks: {', '.join(unflagged)} flagged in `{EXPLOITABLE_FILE}` but not "
+                f"`exploitable` in `{FINDINGS_FILE}`.", ""]
     entries = plan["items"] + [{"id": "summary", "type": "summary", **plan["summary"],
                                 "labels": []}]
     for k, item in enumerate(entries, 1):
         if item["type"] == "advisory":
-            where = (f"draft security advisory, private (exploitable if public), "
-                     f"severity {item['severity']}")
+            where = f"draft security advisory, private, severity {item['severity']}"
         elif item["type"] == "issue":
             where = "public issue"
         else:
@@ -389,8 +413,17 @@ def write_dry_run(config, pad, plan, failures):
         out += [f"## {k}. {item['id']}: {where}", "",
                 f"- title: {item['title']}",
                 f"- labels: {', '.join(item['labels']) or 'none'}",
-                "- parent: none", "",
-                mark + "markdown", item["body"].rstrip("\n"), mark, ""]
+                "- parent: none"]
+        if "mark" in item:
+            m = item["mark"]
+            line = f"- exploitable if public: {'yes' if m['exploitable'] else 'no'}"
+            if m["advisory_set"]:
+                line += ("; filed as a public issue anyway (`advisory: false`)"
+                         if m["exploitable"] else "; filed as an advisory anyway (`advisory: true`)")
+            if m["unflagged"]:
+                line += f"; flagged in `{EXPLOITABLE_FILE}`"
+            out.append(line)
+        out += ["", mark + "markdown", item["body"].rstrip("\n"), mark, ""]
     (pad / DRY_RUN_FILE).write_text("\n".join(out), encoding="utf-8")
 
 

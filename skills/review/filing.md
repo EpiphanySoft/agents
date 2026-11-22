@@ -55,7 +55,12 @@ claims of a reading the owner rejected, are not in it.
 | `decision` | optional | the agreed resolution, from `decisions.md` |
 | `confirmations` | required | the count, 0 or more |
 | `question` | optional | `true` when it is a choice for the owner: adds the question label |
-| `advisory` | optional | `true` to file it as a private draft security advisory instead of an issue |
+| `exploitable` | optional | `true` when the review flagged it exploitable if public; default `false` |
+| `advisory` | optional | `true` files it as a private draft security advisory instead of an issue; defaults to `exploitable`, and is set only where the owner changed a mark at the read |
+
+**`exploitable.json`**, which the coordinator keeps in the work pad while the review runs, lists the
+ids of the claims flagged exploitable: `["U07-12", "U09-3"]`. The dry run names any id in it whose
+finding isn't `exploitable`, so a lost mark is seen at the read.
 
 ## The summary: `summary.json`
 
@@ -78,7 +83,7 @@ claims of a reading the owner rejected, are not in it.
 
 - **`dry-run`** checks the config and both records, lists the areas, and writes
     `filing-dry-run.md`: every issue and advisory it would make, with its title, labels, parent (always
-    none) and full body, the summary last with a placeholder for each link, and the plan's hash. It runs
+    none), exploitable mark and full body, the summary last with a placeholder for each link, and the plan's hash. It runs
     the text check on each, lists any failure at the top and exits 1. It posts nothing.
 - **`post`** builds the plan again and refuses unless its hash matches the dry run's, so it posts
     exactly what the owner read. Then, in order: each finding not yet posted, after its text check; an
