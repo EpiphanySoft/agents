@@ -1,6 +1,6 @@
 ---
 name: review
-description: Code review of a project against its requirements, and filing what it finds. Use when starting, proposing or running a review (Phase 0, the documents, the units, checking, the sweep), when filing a review's findings as issues and private advisories, when taking a finding up after a review, or when adopting this method in a project. Covers the choices, the branch and work pad, the pieces and their briefs, claim kinds, checking and confirmations, the owner's questions attended or unattended, models and effort, and the filing script.
+description: Code review of a project against its requirements, and filing what it finds. Use when starting, proposing or running a review (Phase 0 and its Planning step, the documents, the units, checking, the cross-check), when filing a review's findings as issues and private advisories, when taking a finding up after a review, or when adopting this method in a project. Covers the choices, the branch and work pad, the pieces and their briefs, claim kinds, checking and confirmations, the owner's questions attended or unattended, models and effort, and the filing script.
 ---
 
 # Code review
@@ -36,7 +36,6 @@ here for the rest:
 - **the time cap for an unattended run** of a command over a minute (10 minutes, say);
 - **its settled records**: rejected ideas, and the labels for won't do, later and gap;
 - **claim kinds of its own**, if any (a project that handles money may add one for wrong figures);
-- **its sweeps**: each one's label and steps, laid out by its planning (*Phase 0*);
 - **its target branch**, question label and labels, which must exist in the repository;
 - **its filing config**, `docs/review.json` (see *Filing*).
 
@@ -83,9 +82,10 @@ second blind run on sensitive code and on code new since the last review.
 
 | Where | What |
 |---|---|
-| `code-review-<nnnn>` | the review's branch, from the target at the review's commit; `<nnnn>` the review's number in four digits |
-| `review/<nnnn>/` on it | the work pad: everything a session needs from earlier ones |
-| issues under the sweep's steps, and private advisories | the review's outcome, each standing on its own (*Filing*) |
+| `code-review-<N>` | the review's branch, from the target at the review's commit; `<N>` the review's number, from its sweep (`code-review-1` for CR1) |
+| `review/<N>/` on it | the work pad: everything a session needs from earlier ones |
+| the sweep: its label, its anchor issue and the steps under it | made by the Planning step (*Phase 0*) |
+| issues under the steps, and private advisories | the review's outcome, each standing on its own (*Filing*) |
 
 **Local only.** The branch and work pad are never pushed and never merged: a fork may be public, and
 unchecked claims must not publish before the owner's read. The branch is kept until the next review
@@ -104,7 +104,6 @@ coordinator checks). Each piece's work is committed before the next piece starts
 
 | File | Written by | What |
 |---|---|---|
-| `sweep.json` | Phase 0 | the sweep label and the review's own step (*Phase 0*) |
 | `log.md` | every session | one line a session: start and end (from `date`), the piece, its model and effort, what it wrote, what is left; failures as they happen |
 | `checks.txt` | Phase 0 | the mechanical checks' report |
 | `delta.txt` | Phase 0 | the change since the last review, per unit |
@@ -113,7 +112,7 @@ coordinator checks). Each piece's work is committed before the next piece starts
 | `docs-compare.md` | Phase 1 | the conflicts between the digests |
 | `decisions.md` | the coordinator | each agreed resolution, after its walk thru's final approval |
 | `unit-<nn>-<name>.md` | Phase 2 | a unit's brief, claims, verdicts and what was found while checking ([template](unit-template.md)) |
-| `sweep.md` | the sweep | the verdicts on what was found while checking |
+| `cross-check.md` | the cross-check | the verdicts on what was found while checking |
 | `exploitable.json` | the coordinator | the ids of the claims flagged exploitable if public |
 | `questions.md` | the coordinator | unattended: questions that could not be filed, and those that must stay private |
 | `findings.jsonl`, `summary.json` | filing | the records the filing script reads ([filing.md](filing.md)) |
@@ -146,18 +145,26 @@ for unit 7's twelfth. A finding's lasting id is its issue's number, given when i
 8. **End with the log.** A session's last act is its line in `log.md` and its commit.
 9. **Scratch stays out of the repository**, even for a moment.
 
-## Phase 0: the sweep, the checks, the map, the delta, the proposal
+## Phase 0: the plan, the checks, the map, the delta, the proposal
 
 Phase 0 runs in the coordinating session, or its agent writes the proposal and the coordinator asks.
 
-Every review is a sweep. A sweep is named for good by a label, `sweep:<shorthand>` (`sweep:H1`), and
-its genesis (the project's planning) lays out its steps up front: each an issue with no parent, the
-sweep label, a title `H<x>.<n> <what>` and the area labels it holds; a step may hold several areas,
-and an area has at most one open step. The review is one of the steps.
+The start of a review is the start of its **sweep**: the plan of the work its findings make. One
+name, `<prefix><N>` (`CR1`, the prefix from the project's config, `CR` by default), runs through all
+of it: the sweep label `sweep:CR1`, the anchor, the step ids `CR1.1`, the markers, the branch
+`code-review-1` and the work pad `review/1/`.
 
-1. **Its sweep.** The owner tells the review its sweep label and its own step's issue, if it has
-    one, when it starts. Phase 0 writes them to `sweep.json`, `{"label": "sweep:H1", "step": 41}`,
-    never to the project's config. Filing refuses a review with no sweep label.
+1. **The Planning step**, the coordinator's, before the review's branch exists:
+    `file_review.py plan --dry-run`, then `file_review.py plan` ([filing.md](filing.md)). `N` is one
+    more than the highest among the `sweep:<prefix><N>` labels, or 1. It makes the label
+    `sweep:<prefix><N>` (and stops if it exists already); the **anchor**, an issue titled "CR1 Code
+    review" with the sweep label and no area label, which is the review's own step: its summary and
+    the questions about the review go there; and one **step** per area, in the areas' order, as the
+    anchor's sub-issues: `CR1.<n> <area>`, with the area's label and the sweep label. So an area has
+    one step, and there are three levels: the anchor, its steps, their findings. A plan that stopped
+    part-way is finished by running it again (`plan --sweep CR1`, as its stop says), never repeated.
+    The coordinator then makes the branch `code-review-<N>` from the target. A later piece finds its review from its branch, or from
+    an explicit `--sweep CR1`; nothing about the sweep is kept in the work pad or the config.
 2. **The mechanical checks.** The project's command reports what needs no judgement (citations of
     missing ids, broken tables, stale references) into `checks.txt`, so no agent spends its context
     finding them by reading. What remains becomes Phase 1 claims.
@@ -274,8 +281,8 @@ in the claim format. It never adds them to the claims: nothing enters the review
 context that found it. Rejected claims stay in the unit's file with their reasons, so the next review
 doesn't raise them again without new evidence.
 
-**The sweep.** After the last unit, one session checks everything found while checking, across all
-units, the same way, and writes `sweep.md`. Each one it confirms goes to the unit it belongs to.
+**The cross-check.** After the last unit, one session checks everything found while checking,
+across all units, the same way, and writes `cross-check.md`. Each one it confirms goes to the unit it belongs to.
 
 ## Confirmations and status
 
@@ -300,16 +307,16 @@ with the reason. Confirmations and decisions after filing are comments on its is
 - **Unattended.** Every question is filed as an issue with the project's question label, written as a
     walk-thru item (the question, the options, the recommendation), and walked thru on the owner's
     return. It is labelled and placed like the claim that raised it: the sweep label and the claim's
-    area label, a sub-issue of that area's step, titled like a finding (`H1.6-4 CR1 question: ...`).
-    A question about the review itself (Phase 0's, say) goes under the review's own step.
+    area label, a sub-issue of that area's step, titled like a finding (`CR1.1-3 Question: ...`; its
+    body and marker name the review). A question about the review itself (Phase 0's, say) goes under
+    the anchor.
     `file_review.py question` files it ([filing.md](filing.md)), after the text check.
 - **No unit waits.** A unit whose judgement hangs on an open question reviews under each reading and
     tags its claims with the question. Once the owner decides, the rejected reading's claims are
     dropped, recorded as rejected with the decision as the reason.
 - **Kept private.** A question about a claim that would be exploitable if public (its id is in
     `exploitable.json`) is never filed publicly: `question` keeps it in `questions.md`, and the issue it
-    files says only that one is waiting, without its content or its area, under the review's own
-    step.
+    files says only that one is waiting, without its content or its area, under the anchor.
 - **Through the dry run.** Unattended, the review runs through the filing dry run; only posting waits
     for the owner's read.
 - **Failures don't halt it.** Unattended, a failure is an exception to the standing rule to stop when
@@ -340,13 +347,13 @@ review may simply run in one session.
 Whatever the way, the pieces are the same: the briefs, the work-pad files, the rule that only an
 independent context confirms a claim, and the filing. Where pieces run at once: Phase 1's blocks
 together, the comparison after all of them; units several at a time, within the project's machine
-limits; a checker per claim rather than per unit; the sweep split by unit.
+limits; a checker per claim rather than per unit; the cross-check split by unit.
 
 **Starting a piece.** Each piece starts with a short prompt naming the review, its branch, the piece
 and this skill; the previous piece leaves the next brief written:
 
 ```
-Code review CR4 (review/0004/ on the local code-review-0004 branch), with the review skill:
+Code review CR4 (review/4/ on the local code-review-4 branch), with the review skill:
 run unit 07 (Phase 2, then Checking), on <model> at <effort>. Start from log.md and the unit's brief.
 ```
 
@@ -373,7 +380,7 @@ each.
 | Discovery | next, high | strongest, high | strongest, high |
 | Second blind run: sensitive units | cheaper, high | cheaper, high | cheaper, xhigh |
 | Second blind run: other units | none | none | cheaper, high |
-| Checking and the sweep | cheaper, high | cheaper, high | next, high |
+| Checking and the cross-check | cheaper, high | cheaper, high | next, high |
 | Filing (dry run): the script, and a model pass writing the issue texts, the summary and the exploitable marks | next, high | next, high | next, high |
 
 Recommend **Standard** by default, **Plus** when a review covers much sensitive or never-reviewed code
@@ -382,11 +389,11 @@ proposal.
 
 ## Filing
 
-Filing makes no steps: the sweep's planning made them. Each finding is its own issue, a sub-issue of
+Filing makes no steps: the Planning step made them. Each finding is its own issue, a sub-issue of
 its area's step:
 
-- **a title** of one sentence, `<step id>-<m> <sentence>` (`H1.6-3 A value on the limit is
-    dropped.`): the step id leads its parent's title, and `m` is one more than the highest among that
+- **a title** of one sentence, `<step id>-<m> <sentence>` (`CR1.3-2 A value on the limit is
+    dropped.`): the step id leads its parent's title (`CR1` for the anchor), and `m` is one more than the highest among that
     parent's sub-issues in any state, so a number is never used twice. A parent whose title has no
     leading id gives the plain sentence. A finding that needs more is two findings;
 - **a body** that starts `severity High`, `severity Med` or `severity Low` and holds everything: kind,
@@ -398,18 +405,17 @@ its area's step:
 - **a kind label**, `<kind_prefix><kind>`, when the project's config sets `kind_prefix`; without it,
     the kind is in the body only;
 - **the question label** when it is a choice for the owner;
-- **a parent**: the one open issue that carries its area label and the sweep label, has no parent of
-    its own, and is no finding (no finding's marker in its body). A finding with no area goes under
-    the review's own step, or, with none given, has no parent and the plain sentence. No match, or
-    two or more, and the dry run fails naming the area and the issues; the script never makes a
-    parent.
+- **a parent**: the one open sub-issue of the sweep's anchor that carries its area label and is no
+    finding (no finding's marker in its body). The anchor is the one open issue with the sweep label,
+    no parent and no finding's marker. A finding with no area goes under the anchor. No match, or two
+    or more, and the dry run fails naming the area and the issues; filing never makes a parent.
 
-**The summary** is a comment on the review's own step, posted last. It lists every finding by link
+**The summary** is a comment on the anchor, posted last. It lists every finding by link
 and records: the commit read and the last review's commit; the skill's commit; the branch and its last
 commit; the three choices; the models; the verdict in one line; what matters most; *checked and sound*
 (what was looked at closely and found right, so the next review need not repeat it); and *where things
-stand* (what was left unread or read lightly, and where to start). A review given no step files it as
-an issue instead, "<prefix><n>: summary". Project boards are neither read nor written.
+stand* (what was left unread or read lightly, and where to start). Project boards are neither read
+nor written.
 
 **Exploitable findings.** A finding flagged exploitable if public (a security or privacy flaw)
 is filed as a private draft security advisory instead of a public issue. An advisory can't be a
@@ -417,8 +423,8 @@ sub-issue: its title is the plain sentence, with no parent and no number. The dr
 finding's mark, and the owner confirms or changes each one at the read. The summary gives only their
 count.
 
-**The script.** `file_review.py`, in this folder, files a review from `findings.jsonl`,
-`summary.json` and `sweep.json` in the work pad and the project's `docs/review.json`
+**The script.** `file_review.py`, in this folder, plans the sweep (`plan`, *Phase 0*) and files a
+review from `findings.jsonl` and `summary.json` in the work pad and the project's `docs/review.json`
 ([filing.md](filing.md)):
 
 1. The filing pass (a model, see *Models and effort*) writes the two records from the work pad:

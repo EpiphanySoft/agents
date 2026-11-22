@@ -6,7 +6,7 @@ it goes, and the checker adds a verdict beside each.
 
 ## Brief
 
-- **Review**: <prefix><n>, work pad `review/<nnnn>/` on `code-review-<nnnn>`, commit `<commit>`.
+- **Review**: <prefix><N>, work pad `review/<N>/` on `code-review-<N>`, commit `<commit>`.
 - **Run on**: <model>, <effort>. Discovery run <1 | 2, blind to run 1>.
 - **Sections**: <requirement ids>, read whole.
 - **Code**: <paths>, about <lines> lines; read <whole | the delta and what surrounds it>.
@@ -50,4 +50,4 @@ plausible: <the question> | rejected: <the reason>. **Confirmations**: <n>.
 ## Found while checking
 
 The checker's notes on what no claim covers, each in the claim format above and unverified. The
-sweep checks them; nothing here enters the review on the checker's word.
+cross-check checks them; nothing here enters the review on the checker's word.

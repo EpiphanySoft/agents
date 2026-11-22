@@ -95,7 +95,7 @@ issue, in the review skill's finding shape with `severity` still its first line 
 next, only when the owner says so, all or some: `file_review.py pr file <n> <id> ...`, or `--all` for
 the latest pass's list. The issues follow a sweep only through the pull request: a pull request for a
 sweep's issues carries the sweep label, and each issue then takes that label, a parent by the review
-skill's parent search and its title rule (`H1.6-3 <sentence>`). A pull request with no sweep label
+skill's parent search and its title rule (`CR1.3-2 <sentence>`). A pull request with no sweep label
 gives a plain title and no parent; one with two sweep labels is refused.
 
 ## Plausible claims
