@@ -813,6 +813,9 @@ def load_passes(pad, n):
             raise Refused(f"{path.name}.pass: {record['pass']} is not the file's number")
         if record["pr"] != n:
             raise Refused(f"{path.name}.pr: {record['pr']}, not {n}")
+        if record["checking"] != "checked":
+            raise Refused(f"{path.name}.checking: a pr-review pass is always checked; a quick look "
+                          "is the built-in /code-review's")
         passes[record["pass"]] = record
     if not passes:
         raise Refused(f"work pad {pad}: no pass-<k>.json")

@@ -51,8 +51,9 @@ closes.
 
 ## The level
 
-**Standard, checked**, by default, with no proposal to approve: one session at the review skill's
-Standard level, with its checker. The second blind run follows the level, as Standard does: on
+**Standard** by default, with no proposal to approve: one session at the review skill's Standard
+level, with its checker. **A pass is always checked**: there are no quick passes, and a quick look is
+the built-in `/code-review`'s. The second blind run follows the level, as Standard does: on
 sensitive code the diff touches; at Premium also on the other touched areas (its "other units"). A
 level named anywhere in the request picks it ("run a premium pr-review on #74", "plus review of PR
 74", `/pr-review premium 74`) and carries over to later passes on the same pull request until the owner

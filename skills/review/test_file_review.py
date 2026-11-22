@@ -916,6 +916,8 @@ class PrReviewTest(unittest.TestCase):
              "reply P1-1.sha: a fixed finding names its commit"),
             (dict(second_pass(), pr=75), "pass-2.json.pr: 75, not 74"),
             (dict(second_pass(), level="Gold"), "pass-2.json.level: must be one of"),
+            (dict(second_pass(), checking="quick"),
+             "pass-2.json.checking: a pr-review pass is always checked"),
             (dict(second_pass(), findings=[{k: v for k, v in
                                             pr_finding("P2-1", "No class.", 3).items()
                                             if k != "class"}]),

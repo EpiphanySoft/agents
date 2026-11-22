@@ -176,7 +176,7 @@ whose `name` the `pr` commands don't use. There is no dry run: the gates below a
 | `base` | required | where the delta runs from: the merge base on pass 1, pass `k-1`'s `head` after |
 | `skill_commit` | required | the shared skills' commit pinned on the target branch |
 | `level` | required | `Standard`, `Plus` or `Premium` |
-| `checking` | required | `checked` or `quick` |
+| `checking` | required | `checked`: a pass is always checked, and one marked `quick` is refused |
 | `verdict` | required | one line |
 | `read` | required | a list: what was read (sections, units, what was read whole) |
 | `pieces` | required | `[{"piece", "model", "effort", "tokens"}]`, what each piece ran on |
