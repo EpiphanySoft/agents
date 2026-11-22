@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """File a code review's findings: one issue per finding, a draft security advisory for each finding
-marked exploitable, and a summary issue listing them by link. See filing.md beside this script.
+marked exploitable, and a summary issue listing them by link; and post a pull request review's passes.
+See filing.md beside this script.
 
     file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
     file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
     file_review.py question <question.json> [--config docs/review.json] [--pad review/<nnnn>]
+    file_review.py pr post <n> [--config docs/review.json] [--pad review/pr-<n>]
+    file_review.py pr file <n> (<id> ... | --all) [--config docs/review.json] [--pad review/pr-<n>]
 
 `dry-run` writes the whole plan to <pad>/filing-dry-run.md and posts nothing. `post` posts exactly
 that plan through the gh CLI, keeping <pad>/filing-state.json so a run that stopped can be run again;
 the marker each body ends with lets it find, rather than repeat, an item it made but didn't record.
 `question` files one question for the owner as a walk-thru issue, or keeps it in <pad>/questions.md
-when it can't be filed or its claim is flagged exploitable. It never closes or edits an issue. Python 3
-standard library only.
+when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull request review's
+latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on earlier findings'
+threads; `pr file` files the outside findings the owner chose. Both keep <pad>/pr-state.json, find what
+an earlier run posted by its marker, and leave out every claim flagged exploitable. It never closes or
+edits an issue, and never resolves, approves or requests changes. Python 3 standard library only.
 
 Exit status: 0 done; 1 a text check or gh call failed (what was posted is kept; a question is kept in
 questions.md); 2 refused (a bad config or input, or a plan that doesn't match the dry run).
@@ -279,12 +285,15 @@ def marker(config, item_id):
 MARKER = re.compile(r"<!-- review (\S+) (\S+) -->")
 
 
-def finding_body(config, f):
+def finding_body(config, f, review=None, end=None, title=False):
+    """review and end replace the review line and the marker; title puts the title first."""
     lines = [f"severity {f['severity']}", ""]
+    if title:
+        lines += [f"**{f['title']}**", ""]
     lines.append(f"**Kind:** {f['kind']}")
     lines.append(f"**Requirements:** {', '.join(f['requirements']) or 'none (untraced)'}")
     lines.append(f"**Confirmations:** {f['confirmations']}")
-    lines.append(f"**Review:** {review_name(config)}, work-pad id {f['id']}")
+    lines.append(review or f"**Review:** {review_name(config)}, work-pad id {f['id']}")
     if f.get("question"):
         lines.append("**A choice for the owner:** walked thru before anyone acts on it.")
     if f["code"]:
@@ -299,7 +308,7 @@ def finding_body(config, f):
         lines += ["", "**Alternatives**", ""] + [f"- {a}" for a in f["alternatives"]]
     if f.get("decision"):
         lines += ["", "**Decision**", "", f["decision"]]
-    lines += ["", marker(config, f["id"])]
+    lines += ["", end or marker(config, f["id"])]
     return "\n".join(lines) + "\n"
 
 
@@ -347,6 +356,23 @@ def summary_body(config, summary, items, links):
     return "\n".join(lines) + "\n"
 
 
+def issue_labels(config, f):
+    labels = list(config["labels"])
+    if f["area"] is not None:
+        labels.append(config["area_prefix"] + f["area"])
+    if "kind_prefix" in config:
+        labels.append(config["kind_prefix"] + f["kind"])
+    if f.get("question"):
+        labels.append(config["question_label"])
+    return list(dict.fromkeys(labels))
+
+
+def check_area(f, areas, where):
+    if f["area"] is not None and f["area"] not in areas:
+        raise Refused(f"{where} {f['id']}.area: {f['area']!r} is not one of the "
+                      f"project's areas ({', '.join(sorted(areas)) or 'none listed'})")
+
+
 def build_plan(config, pad):
     findings = load_findings(pad)
     summary = load_summary(pad)
@@ -354,9 +380,7 @@ def build_plan(config, pad):
     flagged = load_exploitable(pad)
     items = []
     for f in findings:
-        if f["area"] is not None and f["area"] not in areas:
-            raise Refused(f"{FINDINGS_FILE} {f['id']}.area: {f['area']!r} is not one of the "
-                          f"project's areas ({', '.join(sorted(areas)) or 'none listed'})")
+        check_area(f, areas, FINDINGS_FILE)
         body = finding_body(config, f)
         exploitable = f.get("exploitable", False)
         mark = {"exploitable": exploitable,
@@ -367,15 +391,8 @@ def build_plan(config, pad):
                           "labels": [], "severity": SEVERITY_FOR_ADVISORY[f["severity"]],
                           "mark": mark, "finding": f})
             continue
-        labels = list(config["labels"])
-        if f["area"] is not None:
-            labels.append(config["area_prefix"] + f["area"])
-        if "kind_prefix" in config:
-            labels.append(config["kind_prefix"] + f["kind"])
-        if f.get("question"):
-            labels.append(config["question_label"])
         items.append({"id": f["id"], "type": "issue", "title": f["title"], "body": body,
-                      "labels": list(dict.fromkeys(labels)), "mark": mark, "finding": f})
+                      "labels": issue_labels(config, f), "mark": mark, "finding": f})
     return {
         "repo": config["repo"],
         "items": items,
@@ -462,15 +479,15 @@ def cmd_dry_run(config, pad):
 
 # ---- post ----
 
-def read_state(pad):
-    path = pad / STATE_FILE
+def read_state(pad, name=STATE_FILE):
+    path = pad / name
     if not path.exists():
         return {"posted": {}}
     return load_json(path, "state")
 
 
-def write_state(pad, state):
-    path = pad / STATE_FILE
+def write_state(pad, state, name=STATE_FILE):
+    path = pad / name
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(tmp, path)
@@ -514,23 +531,28 @@ def json_values(text):
         values.append(value)
 
 
-def already_posted(config):
-    """What earlier runs posted, by the marker in its body: {item id: record}."""
-    name, repo, found = review_name(config), config["repo"], {}
+def review_keys(config):
+    name = review_name(config)
+    return lambda text: [m.group(2) for m in MARKER.finditer(text) if m.group(1) == name]
+
+
+def already_posted(config, keys=None):
+    """What earlier runs posted, by the marker in its body: {item id: record}. keys(text) gives the
+    ids a body's markers name; by default those of this review's own markers."""
+    keys = keys or review_keys(config)
+    repo, found = config["repo"], {}
     out = run(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "10000",
                "--json", "number,url,body"], "gh issue list")
     for issue in json.loads(out):
-        for m in MARKER.finditer(issue.get("body") or ""):
-            if m.group(1) == name:
-                found.setdefault(m.group(2), {"number": issue["number"], "url": issue["url"]})
+        for key in keys(issue.get("body") or ""):
+            found.setdefault(key, {"number": issue["number"], "url": issue["url"]})
     out = run(["gh", "api", "--paginate", f"repos/{repo}/security-advisories?per_page=100"],
               "gh api security-advisories (list)")
     for page in json_values(out):
         for advisory in page:
-            for m in MARKER.finditer(advisory.get("description") or ""):
-                if m.group(1) == name:
-                    found.setdefault(m.group(2), {"ghsa_id": advisory["ghsa_id"],
-                                                  "url": advisory["html_url"]})
+            for key in keys(advisory.get("description") or ""):
+                found.setdefault(key, {"ghsa_id": advisory["ghsa_id"],
+                                       "url": advisory["html_url"]})
     return found
 
 
@@ -680,24 +702,382 @@ def cmd_question(config, pad, path):
     return 0
 
 
+# ---- a pull request's passes: pr post, pr file ----
+
+PASS_FILE = re.compile(r"^pass-([1-9][0-9]*)\.json$")
+PR_STATE_FILE = "pr-state.json"
+PR_MARKER = re.compile(r"<!-- pr-review (\d+) ([^<>]+?) -->")
+TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
+
+_SHA = {"type": "string", "pattern": r"^[0-9a-f]{7,40}$"}
+
+PR_FINDING_SCHEMA = {
+    **FINDING_SCHEMA,
+    "required": [r for r in FINDING_SCHEMA["required"] if r != "area"] + ["at"],
+    "properties": {
+        **FINDING_SCHEMA["properties"],
+        "at": {
+            "type": "object",
+            "required": ["file", "line"],
+            "additionalProperties": False,
+            "properties": {
+                "file": _TEXT,
+                "line": {"type": "integer", "minimum": 1},
+                "start_line": {"type": "integer", "minimum": 1},
+                "side": {"type": "string", "enum": ["RIGHT", "LEFT"]},
+            },
+        },
+    },
+}
+
+PASS_SCHEMA = {
+    "type": "object",
+    "required": ["pr", "pass", "head", "base", "skill_commit", "level", "checking", "verdict",
+                 "read", "pieces", "findings", "outside", "replies"],
+    "additionalProperties": False,
+    "properties": {
+        "pr": {"type": "integer", "minimum": 1},
+        "pass": {"type": "integer", "minimum": 1},
+        "head": {"type": "string", "pattern": r"^[0-9a-f]{40}$"},
+        "base": _SHA,
+        "skill_commit": _SHA,
+        "level": {"type": "string", "enum": ["Standard", "Plus", "Premium"]},
+        "checking": {"type": "string", "enum": ["checked", "quick"]},
+        "verdict": {"type": "string", "minLength": 1, "pattern": r"^[^\n]+$"},
+        "read": _TEXTS,
+        "pieces": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["piece", "model", "effort", "tokens"],
+                "additionalProperties": False,
+                "properties": {"piece": _TEXT, "model": _TEXT, "effort": _TEXT,
+                               "tokens": {"type": "integer", "minimum": 0}},
+            },
+        },
+        "findings": {"type": "array", "items": PR_FINDING_SCHEMA},
+        "outside": {"type": "array", "items": FINDING_SCHEMA},
+        "replies": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["id", "status", "evidence"],
+                "additionalProperties": False,
+                "properties": {"id": FINDING_SCHEMA["properties"]["id"],
+                               "status": {"type": "string", "enum": ["fixed", "holds"]},
+                               "sha": _SHA, "evidence": _TEXT},
+            },
+        },
+    },
+}
+
+
+def pr_marker(n, key):
+    return f"<!-- pr-review {n} {key} -->"
+
+
+def pr_keys(n):
+    return lambda text: [m.group(2) for m in PR_MARKER.finditer(text) if m.group(1) == str(n)]
+
+
+def load_passes(pad, n):
+    """{k: pass} from pass-<k>.json, and {id: (k, "findings" | "outside", record)} across them."""
+    passes = {}
+    for path in sorted(pad.iterdir()):
+        m = PASS_FILE.match(path.name)
+        if not m:
+            continue
+        record = load_json(path, "pass")
+        check_schema(record, PASS_SCHEMA, path.name)
+        if record["pass"] != int(m.group(1)):
+            raise Refused(f"{path.name}.pass: {record['pass']} is not the file's number")
+        if record["pr"] != n:
+            raise Refused(f"{path.name}.pr: {record['pr']}, not {n}")
+        passes[record["pass"]] = record
+    if not passes:
+        raise Refused(f"work pad {pad}: no pass-<k>.json")
+    if sorted(passes) != list(range(1, len(passes) + 1)):
+        raise Refused(f"work pad {pad}: passes {sorted(passes)} are not 1, 2, ... without a gap")
+    ids = {}
+    for k in sorted(passes):
+        p, where = passes[k], f"pass-{k}.json"
+        if k > 1 and not passes[k - 1]["head"].startswith(p["base"]):
+            raise Refused(f"{where}.base: {p['base']} is not pass {k - 1}'s head "
+                          f"{passes[k - 1]['head']}")
+        for part in ("findings", "outside"):
+            for f in p[part]:
+                if f["id"] in ids:
+                    raise Refused(f"{where} {f['id']}: the id is used twice on this pull request")
+                if part == "findings" and f["at"].get("start_line", 0) >= f["at"]["line"]:
+                    raise Refused(f"{where} {f['id']}.at.start_line: must be before line")
+                ids[f["id"]] = (k, part, f)
+        replied = set()
+        for r in p["replies"]:
+            earlier = ids.get(r["id"])
+            if not earlier or earlier[0] >= k or earlier[1] != "findings":
+                raise Refused(f"{where} reply {r['id']}: not an earlier pass's finding in the diff")
+            if r["id"] in replied:
+                raise Refused(f"{where} reply {r['id']}: twice in one pass")
+            if r["status"] == "fixed" and "sha" not in r:
+                raise Refused(f"{where} reply {r['id']}.sha: a fixed finding names its commit")
+            replied.add(r["id"])
+    return passes, ids
+
+
+def flagged(pad, ids):
+    """Every id flagged exploitable: by its record, or in exploitable.json."""
+    return {i for i, (_, _, f) in ids.items() if f.get("exploitable")} | load_exploitable(pad)
+
+
+def counts(findings):
+    return ", ".join(f"{s} {sum(f['severity'] == s for f in findings)}" for s in ("High", "Med", "Low"))
+
+
+def where_of(f):
+    return f"`{f['code'][0]['file']}:{f['code'][0]['line']}`" if f["code"] else "the documents"
+
+
+def pr_review_body(n, p, findings, outside, replies):
+    k = p["pass"]
+    base = ("the merge base" if k == 1 else
+            f"pass {k - 1}'s head, leaving out what came in with a merge of the target")
+    lines = [f"**pr-review, pass {k}**: the head {p['head']}, from {base} ({p['base']})", "",
+             f"**Verdict:** {p['verdict']}", "",
+             f"**Findings on their lines:** {counts(findings) if findings else 'none'}"]
+    if k > 1:
+        fixed = sum(r["status"] == "fixed" for r in replies)
+        lines.append(f"**Earlier findings:** {fixed} fixed, {len(replies) - fixed} still hold, "
+                     "in replies on their threads")
+    lines += ["", "## What was read", ""] + [f"- {t}" for t in p["read"]]
+    lines += ["", "## Outside this PR", ""]
+    lines += [f"- severity {f['severity']}, {where_of(f)}: {f['title']}" for f in outside] or ["- none"]
+    if outside:
+        lines += ["", "Filed as issues only when the owner says so."]
+    lines += ["", "## How it ran", "",
+              f"**Level:** {p['level']}, {p['checking']}. **Method:** the `pr-review` skill at "
+              f"{p['skill_commit']}, as pinned on the target branch.", ""]
+    lines += [f"- {x['piece']}: {x['model']}, {x['effort']}, {x['tokens']:,} tokens"
+              for x in p["pieces"]]
+    lines += ["", pr_marker(n, f"pass {k}")]
+    return "\n".join(lines) + "\n"
+
+
+def reply_body(n, k, p, r):
+    head = f"fixed in {r['sha']}" if r["status"] == "fixed" else f"still holds at {p['head']}"
+    key = f"{r['id']} reply {k}"
+    return f"{head}\n\n{r['evidence'].rstrip()}\n\n{pr_marker(n, key)}\n"
+
+
+def pr_threads(config, n):
+    """What earlier runs posted on the pull request, by marker: ({key: record}, {id: comment id}
+    of each finding's thread). Only reviews and comments by an owner, member or collaborator count;
+    the others are never read, only counted."""
+    repo, found, threads, skipped = config["repo"], {}, {}, 0
+    for what, path in (("reviews", f"repos/{repo}/pulls/{n}/reviews?per_page=100"),
+                       ("comments", f"repos/{repo}/pulls/{n}/comments?per_page=100")):
+        out = run(["gh", "api", "--paginate", path], f"gh api pulls/{n}/{what} (list)")
+        for page in json_values(out):
+            for item in page:
+                if item.get("author_association") not in TRUSTED:
+                    skipped += 1
+                    continue
+                for key in pr_keys(n)(item.get("body") or ""):
+                    found.setdefault(key, {f"{what[:-1]}_id": item["id"],
+                                           "url": item.get("html_url")})
+                    if what == "comments" and not item.get("in_reply_to_id"):
+                        threads.setdefault(key, item["id"])
+    if skipped:
+        print(f"left unread: {skipped} reviews and comments by others on #{n}")
+    return found, threads
+
+
+def gh_post(path, payload, body_path, what):
+    body_path.write_text(json.dumps(payload), encoding="utf-8")
+    out = run(["gh", "api", "--method", "POST", path, "--input", str(body_path)], what)
+    try:
+        answer = json.loads(out)
+        return {"id": answer["id"], "url": answer.get("html_url")}
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise Failed(f"{what}: unexpected answer:\n{out}")
+
+
+def text_gate(config, pad, items):
+    """items: (label, title, body). Every one is checked before anything is posted."""
+    failures = []
+    for label, title, body in items:
+        result = text_check(config, pad, title, body)
+        if result is not None:
+            failures.append(label)
+            print(f"text check failed for {label}:\n{result}", file=sys.stderr)
+    if failures:
+        raise Failed(f"text check failed for {', '.join(failures)}; nothing posted")
+
+
+def post_items(pad, todo, found):
+    """todo: (key, kind, text, create). Skips what the state or a marker shows is posted."""
+    state = read_state(pad, PR_STATE_FILE)
+    posted = state.setdefault("posted", {})
+    for key, kind, text, create in todo:
+        done = posted.get(key)
+        if done:
+            if done["hash"] != item_hash(kind, text):
+                print(f"{key}: posted earlier as {done['url']}, and its text has changed since; "
+                      "left as it is", file=sys.stderr)
+            continue
+        if key in found:
+            record = dict(found[key], found=True)
+            print(f"{key}: found already posted as {record['url']}; recorded, not posted again")
+        else:
+            record = create()
+            print(f"{key}: {record['url']}")
+        record.update(type=kind, hash=item_hash(kind, text))
+        posted[key] = record
+        write_state(pad, state, PR_STATE_FILE)
+
+
+def report_kept(kept):
+    if kept:
+        print("kept in the work pad, flagged exploitable: " + ", ".join(kept))
+
+
+def cmd_pr_post(config, pad, n):
+    passes, ids = load_passes(pad, n)
+    p = passes[max(passes)]
+    k, private = p["pass"], flagged(pad, ids)
+    findings = [f for f in p["findings"] if f["id"] not in private]
+    outside = [f for f in p["outside"] if f["id"] not in private]
+    replies = [r for r in p["replies"] if r["id"] not in private]
+    kept = [x["id"] for x in p["findings"] + p["outside"] + p["replies"] if x["id"] in private]
+    comments = []
+    for f in findings:
+        c = {"path": f["at"]["file"], "line": f["at"]["line"],
+             "side": f["at"].get("side", "RIGHT"),
+             "body": finding_body(config, f, review=f"**Pass:** {k}, work-pad id {f['id']}",
+                                  end=pr_marker(n, f["id"]), title=True)}
+        if "start_line" in f["at"]:
+            c.update(start_line=f["at"]["start_line"], start_side=c["side"])
+        comments.append(c)
+    review = {"commit_id": p["head"], "event": "COMMENT",
+              "body": pr_review_body(n, p, findings, outside, replies), "comments": comments}
+    bodies = [(f"{r['id']} reply {k}", r, reply_body(n, k, p, r)) for r in replies]
+    text_gate(config, pad, [(f"pass {k}", "", review["body"])] +
+              [(f["id"], "", c["body"]) for f, c in zip(findings, comments)] +
+              [(key, "", body) for key, _, body in bodies])
+    posted = read_state(pad, PR_STATE_FILE)["posted"]
+    keys = [f"pass {k}"] + [key for key, _, _ in bodies]
+    found, threads = ({}, {}) if all(key in posted for key in keys) else pr_threads(config, n)
+    for key, r, _ in bodies:
+        if key not in posted and key not in found and r["id"] not in threads:
+            raise Refused(f"{key}: no thread of {r['id']} on #{n} to reply on")
+    body_path = pad / ".pr-body"
+    repo = config["repo"]
+    todo = [(f"pass {k}", "review", json.dumps(review, sort_keys=True),
+             lambda: gh_post(f"repos/{repo}/pulls/{n}/reviews", review, body_path,
+                             f"gh api pulls/{n}/reviews (pass {k})"))]
+    for key, r, body in bodies:
+        todo.append((key, "reply", body,
+                     lambda r=r, body=body, key=key: gh_post(
+                         f"repos/{repo}/pulls/{n}/comments/{threads[r['id']]}/replies",
+                         {"body": body}, body_path, f"gh api reply ({key})")))
+    try:
+        post_items(pad, todo, found)
+    finally:
+        body_path.unlink(missing_ok=True)
+    report_kept(kept)
+    return 0
+
+
+def cmd_pr_file(config, pad, n, chosen, every):
+    passes, ids = load_passes(pad, n)
+    private = flagged(pad, ids)
+    latest = passes[max(passes)]
+    if every:
+        chosen = [f["id"] for f in latest["outside"] if f["id"] not in private]
+        report_kept([f["id"] for f in latest["outside"] if f["id"] in private])
+    items, areas = [], None
+    for fid in dict.fromkeys(chosen):
+        if fid not in ids:
+            raise Refused(f"{fid}: no such finding on #{n}")
+        k, part, f = ids[fid]
+        found_by = f"**Found by:** the review of #{n}, pass {k}, " + \
+            ("outside its diff" if part == "outside" else "on its diff") + f"; work-pad id {fid}"
+        if fid in private:
+            key = f"{fid} advisory"
+            body = finding_body(config, f, review=found_by, end=pr_marker(n, key))
+            items.append((key, "advisory", {"id": fid, "title": f["title"], "body": body,
+                                            "severity": SEVERITY_FOR_ADVISORY[f["severity"]]}))
+            continue
+        if part != "outside":
+            raise Refused(f"{fid}: a finding on the diff, posted on its line, not filed")
+        if areas is None:
+            areas = list_areas(config)
+        check_area(f, areas, f"pass-{k}.json")
+        key = f"{fid} issue"
+        body = finding_body(config, f, review=found_by, end=pr_marker(n, key))
+        items.append((key, "issue", {"id": fid, "title": f["title"], "body": body,
+                                     "labels": issue_labels(config, f)}))
+    if not items:
+        print("nothing to file")
+        return 0
+    text_gate(config, pad, [(key, i["title"], i["body"]) for key, _, i in items])
+    posted = read_state(pad, PR_STATE_FILE)["posted"]
+    found = {} if all(key in posted for key, _, _ in items) else \
+        already_posted(config, keys=pr_keys(n))
+    body_path = pad / ".pr-body"
+
+    def create(kind, item):
+        if kind == "advisory":
+            return create_advisory(config, item, body_path)
+        body_path.write_text(item["body"], encoding="utf-8")
+        return create_issue(config["repo"], item["title"], body_path, item["labels"])
+
+    try:
+        post_items(pad, [(key, kind, f"{i['title']}\n{i['body']}",
+                          lambda kind=kind, i=i: create(kind, i)) for key, kind, i in items], found)
+    finally:
+        body_path.unlink(missing_ok=True)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=["dry-run", "post", "question"])
-    parser.add_argument("file", nargs="?", help="question: the question's JSON file")
+    parser.add_argument("command", choices=["dry-run", "post", "question", "pr"])
+    parser.add_argument("args", nargs="*", help="question: the question's JSON file; "
+                        "pr: post <n>, or file <n> and the ids to file")
+    parser.add_argument("--all", action="store_true",
+                        help="pr file: every outside finding of the latest pass")
     parser.add_argument("--config", default="docs/review.json",
                         help="the project's review config (default docs/review.json)")
-    parser.add_argument("--pad", help="the work pad (default review/<nnnn> from the config)")
+    parser.add_argument("--pad", help="the work pad (default review/<nnnn> from the config, "
+                        "or review/pr-<n>)")
     args = parser.parse_args(argv)
     try:
+        if args.all and (args.command != "pr" or args.args[:1] != ["file"]):
+            raise Refused("--all is for pr file only")
         config = load_config(args.config)
+        if args.command == "pr":
+            if len(args.args) < 2 or args.args[0] not in ("post", "file") or \
+                    not re.fullmatch(r"[1-9][0-9]*", args.args[1]):
+                raise Refused("pr: post <n>, or file <n> (<id> ... | --all)")
+            action, n, rest = args.args[0], int(args.args[1]), args.args[2:]
+            pad = Path(args.pad or f"review/pr-{n}")
+            if not pad.is_dir():
+                raise Refused(f"work pad {pad}: not a folder")
+            if action == "post":
+                if rest:
+                    raise Refused("pr post takes no ids")
+                return cmd_pr_post(config, pad, n)
+            if bool(rest) == args.all:
+                raise Refused("pr file: name the ids to file, or --all, not both")
+            return cmd_pr_file(config, pad, n, rest, args.all)
         pad = Path(args.pad or f"review/{config['name']['number']:04d}")
         if not pad.is_dir():
             raise Refused(f"work pad {pad}: not a folder")
         if args.command == "question":
-            if not args.file:
+            if len(args.args) != 1:
                 raise Refused("question: name the question's JSON file")
-            return cmd_question(config, pad, args.file)
-        if args.file:
+            return cmd_question(config, pad, args.args[0])
+        if args.args:
             raise Refused(f"{args.command} takes no file")
         if args.command == "dry-run":
             return cmd_dry_run(config, pad)

@@ -1,7 +1,8 @@
 # Filing a review: the records and the script
 
 `file_review.py`, beside this file, files a review from two records the filing pass writes in the
-work pad, and files the owner's questions while an unattended review runs. It parses no markdown: the unit files are read by the model pass, which writes the records.
+work pad, and files the owner's questions while an unattended review runs. Its `pr` commands post a
+pull request review's passes (the `pr-review` skill; see *A pull request: `pr`*). It parses no markdown: the unit files are read by the model pass, which writes the records.
 Python 3 standard library and the `gh` CLI, signed in to an account that may create issues and
 security advisories in the repository.
 
@@ -9,6 +10,8 @@ security advisories in the repository.
 python3 <skill>/file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
 python3 <skill>/file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
 python3 <skill>/file_review.py question <question.json> [--config ...] [--pad ...]
+python3 <skill>/file_review.py pr post <n> [--config ...] [--pad review/pr-<n>]
+python3 <skill>/file_review.py pr file <n> (<id> ... | --all) [--config ...] [--pad ...]
 ```
 
 Run from the repository's root. `<skill>` is this folder, wherever the project's pin of the shared
@@ -157,13 +160,77 @@ labelled with `question_label` and `labels`. Its title and body pass the text ch
 Each entry in `questions.md` is headed by its title and says why it is kept there. The coordinator
 logs every exit 1 in `log.md`.
 
+## A pull request: `pr`
+
+A pull request review's work pad is `review/pr-<n>/`, local and untracked. Each pass writes one
+record, `pass-<k>.json`, numbered from 1 without a gap; the config is the same `docs/review.json`,
+whose `name` the `pr` commands don't use. There is no dry run: the gates below are the check.
+
+| Field | | What |
+|---|---|---|
+| `pr` | required | the pull request's number |
+| `pass` | required | `k`, the file's own number |
+| `head` | required | the full commit the pass read; the review's line comments are made on it |
+| `base` | required | where the delta runs from: the merge base on pass 1, pass `k-1`'s `head` after |
+| `skill_commit` | required | the shared skills' commit pinned on the target branch |
+| `level` | required | `Standard`, `Plus` or `Premium` |
+| `checking` | required | `checked` or `quick` |
+| `verdict` | required | one line |
+| `read` | required | a list: what was read (sections, units, what was read whole) |
+| `pieces` | required | `[{"piece", "model", "effort", "tokens"}]`, what each piece ran on |
+| `findings` | required | the findings on the diff: the finding shape of `findings.jsonl`, with `area` optional and `at` added |
+| `outside` | required | the findings the pull request didn't cause: the finding shape of `findings.jsonl` |
+| `replies` | required | `[{"id", "status", "sha", "evidence"}]`, one per earlier finding on the diff re-checked: `status` `fixed` (with `sha`, the commit that fixed it) or `holds` |
+
+`at` is `{"file", "line", "start_line", "side"}`: the line of the diff at `head` the comment sits on,
+`start_line` for a span, `side` `RIGHT` (the new code, the default) or `LEFT` (a removed line). A line
+outside the diff makes GitHub refuse the whole review: the run stops, and the finding moves to a line
+of the diff, or to `outside`. Ids are unique across the pull request's passes, such as `P2-3` for
+pass 2's third.
+
+**Exploitable.** A finding with `exploitable: true`, or whose id is in the work pad's
+`exploitable.json`, is in no `gh` call of `pr post` or `pr file --all`: no comment, no count, no line
+of the outside list, no reply. Each run names the ids it kept back.
+
+- **`pr post <n>`** posts the latest pass. It refuses records that don't hold together (a gap in the
+    passes, a `base` that isn't the last `head`, an id used twice, a reply to anything but an earlier
+    pass's finding on the diff, a `fixed` reply without its `sha`). It text-checks the review's body,
+    every line comment and every reply, and posts nothing if any fails (exit 1). Then it posts one
+    review, `POST repos/<repo>/pulls/<n>/reviews` with event `COMMENT`, its body the summary and each
+    finding a line comment; then each reply on its finding's thread
+    (`POST .../pulls/<n>/comments/<id>/replies`). A reply whose thread isn't found is refused before
+    anything is posted.
+- **`pr file <n> <id> ...`** files the outside findings the owner chose as issues, in the finding
+    shape and labels of *The issue body*, with a line saying which pass found it. `--all` takes every
+    outside finding of the latest pass but the exploitable ones. An exploitable id, named on its own,
+    is filed as a private draft security advisory, the way a full review files one. A finding on the
+    diff is refused: it is on its line already. Every title and body is text-checked before anything
+    is filed.
+- **Markers.** The review's body ends `<!-- pr-review <n> pass <k> -->`, a line comment
+    `<!-- pr-review <n> <id> -->`, a reply `<!-- pr-review <n> <id> reply <k> -->`, a filed issue or
+    advisory `<!-- pr-review <n> <id> issue -->` or `... advisory -->`. What is posted is recorded in
+    `pr-state.json` as it is made; before making anything the state doesn't hold, the script reads
+    the pull request's reviews and comments (and, for `pr file`, the issues and advisories), and an
+    item whose marker it finds is recorded as found, not posted again. So a run again after a stop
+    posts only what is missing.
+- **Only the project's people.** Of the pull request's reviews and comments, only those whose
+    `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR` are read for markers and threads; the
+    others are counted, never read, so a marker someone else planted can't stop a post or take a
+    reply.
+- **Never** closes or edits anything, resolves a thread, approves or requests changes: the only
+    calls that make something are the review with event `COMMENT`, the replies, the issues and the
+    advisories.
+
 ## Tests
 
 `test_file_review.py` runs the script against a stub `gh` on `PATH` in a temp directory, so nothing
 reaches GitHub: the dry run, a post, a run again after a partial post or after an item made but not
 recorded, bad configs and records, a failing text check, the kind labels and exploitable marks, a
 question filed, kept private, not filed and failing its text check, and that nothing is closed or
-edited.
+edited. For `pr`: a first pass, a run again after a partial post and after a review made but not
+recorded, a second pass replying on threads, filing the chosen outside findings, a failing text
+check, markers planted by others, refused records, that exploitable claims reach no `gh` call, and
+that no forbidden call is made.
 
 ```
 python3 skills/review/test_file_review.py
