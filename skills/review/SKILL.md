@@ -400,7 +400,8 @@ count.
 2. `file_review.py dry-run` writes every issue and advisory it would make to `filing-dry-run.md` and
     posts nothing. The owner reads it.
 3. `file_review.py post` posts exactly what the dry run showed, text-checking each body first,
-    and can be run again after a stop.
+    and can be run again after a stop: a hidden marker in each body lets it find what an earlier run
+    posted, so it never posts a copy.
 
 A bug found by mutation testing (the `mutation` skill) is filed as a finding in the same shape, with
 its area's label.

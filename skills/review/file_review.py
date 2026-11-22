@@ -6,7 +6,8 @@ marked exploitable, and a summary issue listing them by link. See filing.md besi
     file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
 
 `dry-run` writes the whole plan to <pad>/filing-dry-run.md and posts nothing. `post` posts exactly
-that plan through the gh CLI, keeping <pad>/filing-state.json so a run that stopped can be run again.
+that plan through the gh CLI, keeping <pad>/filing-state.json so a run that stopped can be run again;
+the marker each body ends with lets it find, rather than repeat, an item it made but didn't record.
 It never closes or edits an issue. Python 3 standard library only.
 
 Exit status: 0 done; 1 a text check or gh call failed (what was posted is kept); 2 refused (a bad
@@ -185,6 +186,8 @@ def load_findings(pad):
         except json.JSONDecodeError as e:
             raise Refused(f"{FINDINGS_FILE} line {n}: not JSON ({e.msg})")
         check_schema(record, FINDING_SCHEMA, f"{FINDINGS_FILE} line {n}")
+        if record["id"] == "summary":
+            raise Refused(f"{FINDINGS_FILE} line {n}.id: \"summary\" is the summary's own")
         if record["id"] in seen:
             raise Refused(f"{FINDINGS_FILE} line {n}.id: {record['id']} is used twice")
         seen.add(record["id"])
@@ -262,6 +265,14 @@ def fence(text, mark="`"):
     return mark * max(3, longest + 1)
 
 
+def marker(config, item_id):
+    """The hidden line every body ends with, so a re-run finds what an earlier run posted."""
+    return f"<!-- review {review_name(config)} {item_id} -->"
+
+
+MARKER = re.compile(r"<!-- review (\S+) (\S+) -->")
+
+
 def finding_body(config, f):
     lines = [f"severity {f['severity']}", ""]
     lines.append(f"**Kind:** {f['kind']}")
@@ -282,6 +293,7 @@ def finding_body(config, f):
         lines += ["", "**Alternatives**", ""] + [f"- {a}" for a in f["alternatives"]]
     if f.get("decision"):
         lines += ["", "**Decision**", "", f["decision"]]
+    lines += ["", marker(config, f["id"])]
     return "\n".join(lines) + "\n"
 
 
@@ -325,6 +337,7 @@ def summary_body(config, summary, items, links):
     for heading, key in (("Checked and sound", "checked_and_sound"),
                          ("Where things stand", "where_things_stand")):
         lines += ["", f"## {heading}", ""] + [f"- {t}" for t in summary[key]]
+    lines += ["", marker(config, "summary")]
     return "\n".join(lines) + "\n"
 
 
@@ -483,6 +496,38 @@ def create_advisory(config, item, body_path):
         raise Failed(f"gh api security-advisories ({item['id']}): unexpected answer:\n{out}")
 
 
+def json_values(text):
+    """The JSON values in text, one after another (gh api --paginate prints one per page)."""
+    decoder, values, at = json.JSONDecoder(), [], 0
+    while True:
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at == len(text):
+            return values
+        value, at = decoder.raw_decode(text, at)
+        values.append(value)
+
+
+def already_posted(config):
+    """What earlier runs posted, by the marker in its body: {item id: record}."""
+    name, repo, found = review_name(config), config["repo"], {}
+    out = run(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "10000",
+               "--json", "number,url,body"], "gh issue list")
+    for issue in json.loads(out):
+        for m in MARKER.finditer(issue.get("body") or ""):
+            if m.group(1) == name:
+                found.setdefault(m.group(2), {"number": issue["number"], "url": issue["url"]})
+    out = run(["gh", "api", "--paginate", f"repos/{repo}/security-advisories?per_page=100"],
+              "gh api security-advisories (list)")
+    for page in json_values(out):
+        for advisory in page:
+            for m in MARKER.finditer(advisory.get("description") or ""):
+                if m.group(1) == name:
+                    found.setdefault(m.group(2), {"ghsa_id": advisory["ghsa_id"],
+                                                  "url": advisory["html_url"]})
+    return found
+
+
 def cmd_post(config, pad):
     plan = build_plan(config, pad)
     dry = pad / DRY_RUN_FILE
@@ -494,41 +539,48 @@ def cmd_post(config, pad):
     state = read_state(pad)
     posted = state.setdefault("posted", {})
     body_path = pad / ".filing-body"
+    found = None
+
+    def post_one(item_id, kind, title, body, create):
+        nonlocal found
+        done = posted.get(item_id)
+        if done:
+            if done["hash"] != item_hash(title, body):
+                print(f"{item_id}: posted earlier as {done['url']}, and its text has changed "
+                      "since; left as it is", file=sys.stderr)
+            return
+        if found is None:
+            found = already_posted(config)
+        if item_id in found:
+            record = dict(found[item_id], found=True)
+            print(f"{item_id}: found already posted as {record['url']}; recorded, not posted again")
+        else:
+            result = text_check(config, pad, title, body)
+            if result is not None:
+                raise Failed(f"text check failed for {item_id}; nothing more posted:\n{result}")
+            record = create()
+            print(f"{item_id}: {record['url']}")
+        record.update(type=kind, hash=item_hash(title, body))
+        posted[item_id] = record
+        write_state(pad, state)
+
+    def issue(title, body, labels):
+        def create():
+            body_path.write_text(body, encoding="utf-8")
+            return create_issue(plan["repo"], title, body_path, labels)
+        return create
+
     try:
         for item in plan["items"]:
-            done = posted.get(item["id"])
-            if done:
-                if done["hash"] != item_hash(item["title"], item["body"]):
-                    print(f"{item['id']}: posted earlier as {done['url']}, and its text has "
-                          "changed since; left as it is", file=sys.stderr)
-                continue
-            result = text_check(config, pad, item["title"], item["body"])
-            if result is not None:
-                raise Failed(f"text check failed for {item['id']}; nothing more posted:\n{result}")
             if item["type"] == "advisory":
-                record = create_advisory(config, item, body_path)
+                create = lambda item=item: create_advisory(config, item, body_path)
             else:
-                body_path.write_text(item["body"], encoding="utf-8")
-                record = create_issue(plan["repo"], item["title"], body_path, item["labels"])
-            record.update(type=item["type"], hash=item_hash(item["title"], item["body"]))
-            posted[item["id"]] = record
-            write_state(pad, state)
-            print(f"{item['id']}: {record['url']}")
-        if "summary" in posted:
-            print(f"summary: posted earlier as {posted['summary']['url']}")
-            return 0
+                create = issue(item["title"], item["body"], item["labels"])
+            post_one(item["id"], item["type"], item["title"], item["body"], create)
         links = {i: f"#{r['number']}" for i, r in posted.items() if r.get("type") == "issue"}
         title = plan["summary"]["title"]
         body = summary_body(config, plan["summary"]["data"], plan["items"], links)
-        result = text_check(config, pad, title, body)
-        if result is not None:
-            raise Failed(f"text check failed for the summary; it is not posted:\n{result}")
-        body_path.write_text(body, encoding="utf-8")
-        record = create_issue(plan["repo"], title, body_path, [])
-        record.update(type="summary", hash=item_hash(title, body))
-        posted["summary"] = record
-        write_state(pad, state)
-        print(f"summary: {record['url']}")
+        post_one("summary", "summary", title, body, issue(title, body, []))
         return 0
     finally:
         body_path.unlink(missing_ok=True)

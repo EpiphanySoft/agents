@@ -93,8 +93,13 @@ finding isn't `exploitable`, so a lost mark is seen at the read.
     as it is made.
 - **Again after a stop.** A failed text check or `gh` call stops the run (exit 1) and keeps the state.
     Run `post` again and it skips what the state holds. A finding posted and changed since is left as it
-    is, and said so. A stop between a post and its state line can leave one copy unrecorded: check the
-    repository's newest issue before running again.
+    is, and said so.
+- **No copies.** Every body ends with a hidden marker naming the review and the item,
+    `<!-- review CR1 U07-12 -->` (the summary's is `<!-- review CR1 summary -->`). Before it creates
+    anything the state doesn't hold, `post` reads the repository's issues in every state (`gh issue
+    list`) and its security advisories (`gh api`), once a run, and an item whose marker it finds there is
+    recorded in the state as found, not posted again. So a run that stopped between making an item and
+    recording it leaves no copy.
 - **Never** closes or edits an issue.
 - A bad config or record is refused (exit 2) before anything is posted.
 
@@ -114,12 +119,15 @@ severity Med
 **Remedy**
 **Alternatives**  (when there are any)
 **Decision**  (when there is one)
+
+<!-- review CR1 U07-12 -->
 ```
 
 ## Tests
 
 `test_file_review.py` runs the script against a stub `gh` on `PATH` in a temp directory, so nothing
-reaches GitHub: the dry run, a post, a run again after a partial post, bad configs and records, a
+reaches GitHub: the dry run, a post, a run again after a partial post or after an item made but not
+recorded, bad configs and records, a
 failing text check, and that nothing is closed or edited.
 
 ```

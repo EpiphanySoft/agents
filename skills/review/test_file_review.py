@@ -17,30 +17,60 @@ SCRIPT = Path(__file__).resolve().parent / "file_review.py"
 
 STUB_GH = textwrap.dedent("""\
     #!/usr/bin/env python3
-    # A stand-in for gh: logs each call, answers label list, issue create and the advisory POST.
+    # A stand-in for gh that keeps what it "posts" in store.json, so listing it back works.
+    # STUB_FAIL_AT=n fails the n-th create before making it; STUB_LOSE_AT=n makes it, then fails.
     import json, os, sys
     root = os.environ["STUB_ROOT"]
     args = sys.argv[1:]
     with open(os.path.join(root, "gh-calls.jsonl"), "a") as log:
         log.write(json.dumps(args) + "\\n")
-    def counter():
-        path = os.path.join(root, "gh-count")
-        n = int(open(path).read()) + 1 if os.path.exists(path) else 1
-        open(path, "w").write(str(n))
-        return n
-    if args[:2] == ["label", "list"]:
-        print(json.dumps([{"name": n} for n in ["area:core", "area:docs", "review", "question",
-                                                "bug"]]))
-    elif args[:2] in (["issue", "create"], ["api", "--method"]):
-        n = counter()
-        if os.environ.get("STUB_FAIL_AT") == str(n):
+    path = os.path.join(root, "store.json")
+    store = json.load(open(path)) if os.path.exists(path) else {"creates": 0, "issues": [],
+                                                                  "advisories": []}
+    def save():
+        json.dump(store, open(path, "w"))
+    def creating():
+        store["creates"] += 1
+        save()
+        if os.environ.get("STUB_FAIL_AT") == str(store["creates"]):
             sys.stderr.write("HTTP 502: stub failure\\n")
             sys.exit(1)
-        if args[0] == "issue":
-            print(f"https://github.com/owner/proj/issues/{100 + n}")
-        else:
-            print(json.dumps({"ghsa_id": f"GHSA-stub-{n}",
-                              "html_url": f"https://github.com/owner/proj/security/advisories/GHSA-stub-{n}"}))
+    def made():
+        save()
+        if os.environ.get("STUB_LOSE_AT") == str(store["creates"]):
+            sys.stderr.write("stub: connection lost after the create\\n")
+            sys.exit(1)
+    def value(flag):
+        return args[args.index(flag) + 1]
+    if args[:2] == ["label", "list"]:
+        print(json.dumps([{"name": n} for n in ["area:core", "area:docs", "review", "question",
+                                                "bug", "kind:bug", "kind:differs"]]))
+    elif args[:2] == ["issue", "list"]:
+        print(json.dumps([{k: i[k] for k in ("number", "url", "body")} for i in store["issues"]]))
+    elif args[:2] == ["issue", "create"]:
+        creating()
+        n = 100 + len(store["issues"]) + 1
+        url = f"https://github.com/owner/proj/issues/{n}"
+        labels = [args[i + 1] for i, a in enumerate(args) if a == "--label"]
+        store["issues"].append({"number": n, "url": url, "title": value("--title"),
+                                "body": open(value("--body-file")).read(), "labels": labels})
+        made()
+        print(url)
+    elif args[:3] == ["api", "--method", "POST"]:
+        creating()
+        payload = json.load(open(value("--input")))
+        k = len(store["advisories"]) + 1
+        adv = {"ghsa_id": f"GHSA-stub-{k}", "summary": payload["summary"],
+               "description": payload["description"],
+               "html_url": f"https://github.com/owner/proj/security/advisories/GHSA-stub-{k}"}
+        store["advisories"].append(adv)
+        made()
+        print(json.dumps(adv))
+    elif args[:2] == ["api", "--paginate"]:
+        # Two pages, as gh prints them: one JSON array after another.
+        half = len(store["advisories"]) // 2
+        print(json.dumps(store["advisories"][:half]))
+        print(json.dumps(store["advisories"][half:]))
     else:
         sys.stderr.write("stub gh: unexpected call\\n")
         sys.exit(3)
@@ -92,6 +122,7 @@ class FileReviewTest(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{stub_dir}{os.pathsep}{os.environ['PATH']}",
                         STUB_ROOT=str(self.root))
         self.env.pop("STUB_FAIL_AT", None)
+        self.env.pop("STUB_LOSE_AT", None)
         self.config = {
             "repo": "owner/proj", "name": {"prefix": "CR", "number": 1},
             "area_prefix": "area:", "labels": ["review"],
@@ -126,7 +157,13 @@ class FileReviewTest(unittest.TestCase):
         return [json.loads(line) for line in path.read_text().splitlines()]
 
     def posting_calls(self):
-        return [c for c in self.calls() if c[:2] != ["label", "list"]]
+        """The calls that make something: issue create and the advisory POST."""
+        return [c for c in self.calls()
+                if c[:2] == ["issue", "create"] or c[:3] == ["api", "--method", "POST"]]
+
+    def store(self):
+        path = self.root / "store.json"
+        return json.loads(path.read_text()) if path.exists() else {"issues": [], "advisories": []}
 
     def state(self):
         return json.loads((self.pad / "filing-state.json").read_text())["posted"]
@@ -220,21 +257,46 @@ class FileReviewTest(unittest.TestCase):
 
     def test_summary_links_findings_and_keeps_advisories_private(self):
         self.run_script("dry-run")
-        # Swap in a stub that also saves each body file it is given.
-        (self.root / "bin" / "gh").write_text(STUB_GH.replace(
-            'if args[:2] == ["label", "list"]:',
-            'if "--body-file" in args:\n'
-            '    open(os.path.join(root, "bodies.txt"), "a").write(\n'
-            '        open(args[args.index("--body-file") + 1]).read() + "\\n=====\\n")\n'
-            'if args[:2] == ["label", "list"]:'))
         self.assertEqual(self.run_script("post").returncode, 0)
-        bodies = (self.root / "bodies.txt").read_text().split("\n=====\n")
-        summary = bodies[2]
+        summary = self.store()["issues"][-1]["body"]
         self.assertIn("- #101 severity Med, bug, area core: A value on the limit is dropped.", summary)
-        self.assertIn("- #103 severity Med, differs, area docs:", summary)
+        self.assertIn("- #102 severity Med, differs, area docs:", summary)
         self.assertNotIn("forged", summary)
         self.assertIn("1 more finding is filed as a draft security advisory, private", summary)
         self.assertNotIn("#<", summary)
+
+    def test_every_body_ends_with_its_marker(self):
+        self.run_script("dry-run")
+        self.run_script("post")
+        store = self.store()
+        bodies = [i["body"] for i in store["issues"]] + [a["description"] for a in store["advisories"]]
+        for item_id in ("U01-1", "D1-1", "summary", "U01-2"):
+            self.assertEqual(sum(b.endswith(f"<!-- review CR1 {item_id} -->\n") for b in bodies), 1)
+
+    def test_rerun_after_a_create_that_was_not_recorded(self):
+        self.run_script("dry-run")
+        # The second create (the advisory) is made, then gh fails before the script records it.
+        done = self.run_script("post", STUB_LOSE_AT="2")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(set(self.state()), {"U01-1"})
+        self.assertEqual(len(self.store()["advisories"]), 1)
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("U01-2: found already posted", done.stdout)
+        store = self.store()
+        self.assertEqual(len(store["advisories"]), 1)
+        self.assertEqual(len(store["issues"]), 3)
+        self.assertEqual(self.state()["U01-2"]["ghsa_id"], "GHSA-stub-1")
+        self.assertTrue(self.state()["U01-2"]["found"])
+
+    def test_lost_issue_create_is_found_and_linked(self):
+        self.run_script("dry-run")
+        self.assertEqual(self.run_script("post", STUB_LOSE_AT="1").returncode, 1)
+        self.assertNotIn("U01-1", self.state() if (self.pad / "filing-state.json").exists() else {})
+        self.assertEqual(self.run_script("post").returncode, 0)
+        store = self.store()
+        self.assertEqual([i["number"] for i in store["issues"]], [101, 102, 103])
+        self.assertIn("- #101 severity Med", store["issues"][-1]["body"])
 
     def test_post_needs_a_dry_run_that_matches(self):
         done = self.run_script("post")
@@ -281,8 +343,8 @@ class FileReviewTest(unittest.TestCase):
         self.run_script("post")
         for call in self.calls():
             self.assertNotIn(call[:2], (["issue", "close"], ["issue", "edit"]))
-            if call[0] == "api":
-                self.assertEqual(call[2], "POST")
+            if call[:2] == ["api", "--method"]:
+                self.assertEqual(call[2:4], ["POST", "repos/owner/proj/security-advisories"])
 
     # ---- refusals ----
 
@@ -325,6 +387,11 @@ class FileReviewTest(unittest.TestCase):
         self.findings[1]["severity"] = "Critical"
         self.write_inputs()
         self.refused("findings.jsonl line 2.severity: must be one of High, Med, Low")
+
+    def test_a_finding_may_not_take_the_summary_id(self):
+        self.findings[0]["id"] = "summary"
+        self.write_inputs()
+        self.refused("line 1.id: \"summary\" is the summary's own")
 
     def test_areas_from_a_command(self):
         self.config["areas_command"] = f"{sys.executable} -c \"print('core'); print('docs')\""
