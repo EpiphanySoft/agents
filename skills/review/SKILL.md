@@ -289,19 +289,19 @@ with the reason. Confirmations and decisions after filing are comments on its is
     decides it.
 - **Unattended.** Every question is filed as an issue with the project's question label, written as a
     walk-thru item (the question, the options, the recommendation), and walked thru on the owner's
-    return.
+    return. `file_review.py question` files it ([filing.md](filing.md)), after the text check.
 - **No unit waits.** A unit whose judgement hangs on an open question reviews under each reading and
     tags its claims with the question. Once the owner decides, the rejected reading's claims are
     dropped, recorded as rejected with the decision as the reason.
-- **Kept private.** A question about a claim that would be exploitable if public is never filed
-    publicly: it stays in `questions.md`, and a question issue says only that one is waiting, without
-    its content.
+- **Kept private.** A question about a claim that would be exploitable if public (its id is in
+    `exploitable.json`) is never filed publicly: `question` keeps it in `questions.md`, and the issue it
+    files says only that one is waiting, without its content.
 - **Through the dry run.** Unattended, the review runs through the filing dry run; only posting waits
     for the owner's read.
 - **Failures don't halt it.** Unattended, a failure is an exception to the standing rule to stop when
     signing or pushing fails; its other half, never working around it, still holds. A commit that can't
     be signed stays uncommitted in the work pad (never unsigned, never another identity). A question
-    issue that can't be filed is written to `questions.md`. Each failure is logged in `log.md` as it
+    that can't be filed, or fails the text check, is written to `questions.md` by `question`. Each failure is logged in `log.md` as it
     happens, and the report on the owner's return opens with them.
 
 ## How a review runs

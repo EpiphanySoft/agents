@@ -1,13 +1,14 @@
 # Filing a review: the records and the script
 
 `file_review.py`, beside this file, files a review from two records the filing pass writes in the
-work pad. It parses no markdown: the unit files are read by the model pass, which writes the records.
+work pad, and files the owner's questions while an unattended review runs. It parses no markdown: the unit files are read by the model pass, which writes the records.
 Python 3 standard library and the `gh` CLI, signed in to an account that may create issues and
 security advisories in the repository.
 
 ```
 python3 <skill>/file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
 python3 <skill>/file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
+python3 <skill>/file_review.py question <question.json> [--config ...] [--pad ...]
 ```
 
 Run from the repository's root. `<skill>` is this folder, wherever the project's pin of the shared
@@ -59,8 +60,10 @@ claims of a reading the owner rejected, are not in it.
 | `advisory` | optional | `true` files it as a private draft security advisory instead of an issue; defaults to `exploitable`, and is set only where the owner changed a mark at the read |
 
 **`exploitable.json`**, which the coordinator keeps in the work pad while the review runs, lists the
-ids of the claims flagged exploitable: `["U07-12", "U09-3"]`. The dry run names any id in it whose
-finding isn't `exploitable`, so a lost mark is seen at the read.
+ids of the claims flagged exploitable: `["U07-12", "U09-3"]`. The `question` command reads it, and the
+dry run names any id in it whose finding isn't `exploitable`, so a lost mark is seen at the read. It,
+not `findings.jsonl`, is what `question` reads, because questions come while the review runs, before
+the filing pass writes `findings.jsonl`.
 
 ## The summary: `summary.json`
 
@@ -123,12 +126,44 @@ severity Med
 <!-- review CR1 U07-12 -->
 ```
 
+## A question: `question`
+
+Unattended, the coordinator files each question for the owner with `question`, from a JSON file it
+writes (in the work pad or a scratch directory):
+
+```json
+{
+  "question": "Is a value on the limit kept?",
+  "options": [
+    {"option": "Keep it", "means": "the limit is inclusive"},
+    {"option": "Drop it", "means": "the limit is exclusive, as the code does"}
+  ],
+  "recommendation": "Keep it: R1.2 says up to and including.",
+  "claim": "U07-12"
+}
+```
+
+`question`, `options` (two or more, each with what it means) and `recommendation` are required;
+`claim`, a work-pad id, is optional. The issue is titled "CR1 question: <the question's first line>",
+written as a walk-thru item (the question, the numbered options, the recommendation, the claim), and
+labelled with `question_label` and `labels`. Its title and body pass the text check first.
+
+- **Private.** When `claim` is in `exploitable.json`, the question is appended to the work pad's
+    `questions.md`, and the issue filed says only that a private question is waiting, with no content.
+- **Not filed.** When the text check fails or `gh` does, the question is appended to `questions.md`
+    with the reason, and the command exits 1. For a private question, the notice that couldn't be
+    filed is noted there too.
+
+Each entry in `questions.md` is headed by its title and says why it is kept there. The coordinator
+logs every exit 1 in `log.md`.
+
 ## Tests
 
 `test_file_review.py` runs the script against a stub `gh` on `PATH` in a temp directory, so nothing
 reaches GitHub: the dry run, a post, a run again after a partial post or after an item made but not
-recorded, bad configs and records, a
-failing text check, and that nothing is closed or edited.
+recorded, bad configs and records, a failing text check, the kind labels and exploitable marks, a
+question filed, kept private, not filed and failing its text check, and that nothing is closed or
+edited.
 
 ```
 python3 skills/review/test_file_review.py

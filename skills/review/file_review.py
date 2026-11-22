@@ -4,14 +4,17 @@ marked exploitable, and a summary issue listing them by link. See filing.md besi
 
     file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
     file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
+    file_review.py question <question.json> [--config docs/review.json] [--pad review/<nnnn>]
 
 `dry-run` writes the whole plan to <pad>/filing-dry-run.md and posts nothing. `post` posts exactly
 that plan through the gh CLI, keeping <pad>/filing-state.json so a run that stopped can be run again;
 the marker each body ends with lets it find, rather than repeat, an item it made but didn't record.
-It never closes or edits an issue. Python 3 standard library only.
+`question` files one question for the owner as a walk-thru issue, or keeps it in <pad>/questions.md
+when it can't be filed or its claim is flagged exploitable. It never closes or edits an issue. Python 3
+standard library only.
 
-Exit status: 0 done; 1 a text check or gh call failed (what was posted is kept); 2 refused (a bad
-config or input, or a plan that doesn't match the dry run).
+Exit status: 0 done; 1 a text check or gh call failed (what was posted is kept; a question is kept in
+questions.md); 2 refused (a bad config or input, or a plan that doesn't match the dry run).
 """
 
 import argparse
@@ -32,6 +35,7 @@ STATE_FILE = "filing-state.json"
 FINDINGS_FILE = "findings.jsonl"
 SUMMARY_FILE = "summary.json"
 EXPLOITABLE_FILE = "exploitable.json"
+QUESTIONS_FILE = "questions.md"
 CHECK_FILE = ".text-check.md"
 
 SEVERITY_FOR_ADVISORY = {"High": "high", "Med": "medium", "Low": "low"}
@@ -145,6 +149,8 @@ def check_schema(value, schema, where):
             elif schema.get("additionalProperties", True) is False:
                 raise Refused(f"{where}.{name}: not a known field")
     if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            raise Refused(f"{where}: needs at least {schema['minItems']} items")
         for i, item in enumerate(value):
             if "items" in schema:
                 check_schema(item, schema["items"], f"{where}[{i}]")
@@ -586,9 +592,98 @@ def cmd_post(config, pad):
         body_path.unlink(missing_ok=True)
 
 
+# ---- question ----
+
+QUESTION_SCHEMA = {
+    "type": "object",
+    "required": ["question", "options", "recommendation"],
+    "additionalProperties": False,
+    "properties": {
+        "question": _TEXT,
+        "options": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+                "type": "object",
+                "required": ["option", "means"],
+                "additionalProperties": False,
+                "properties": {"option": _TEXT, "means": _TEXT},
+            },
+        },
+        "recommendation": _TEXT,
+        "claim": FINDING_SCHEMA["properties"]["id"],
+    },
+}
+
+
+def question_title(config, q):
+    first = q["question"].strip().splitlines()[0]
+    if len(first) > 100:
+        first = first[:97].rstrip() + "..."
+    return f"{review_name(config)} question: {first}"
+
+
+def question_body(config, q):
+    lines = [f"**Question:** {q['question'].strip()}", "", "**Options**", ""]
+    for k, o in enumerate(q["options"], 1):
+        lines.append(f"{k}. **{o['option']}**: {o['means']}")
+    lines += ["", f"**Recommendation:** {q['recommendation']}", ""]
+    if "claim" in q:
+        lines.append(f"**Claim:** {q['claim']}, in the work pad of review {review_name(config)}")
+    else:
+        lines.append(f"**Review:** {review_name(config)}")
+    lines += ["", "Walked thru on the owner's return; the answer is a comment here."]
+    return "\n".join(lines) + "\n"
+
+
+def keep_in_questions_md(pad, title, body, reason):
+    with open(pad / QUESTIONS_FILE, "a", encoding="utf-8") as f:
+        f.write(f"## {title}\n\nKept here: {reason}\n\n{body}\n")
+    print(f"kept in {pad / QUESTIONS_FILE}: {reason}")
+
+
+def file_question_issue(config, pad, title, body):
+    """The new issue's record; Failed when the text check or gh refuses it."""
+    result = text_check(config, pad, title, body)
+    if result is not None:
+        raise Failed(f"text check failed:\n{result}")
+    body_path = pad / ".question-body"
+    body_path.write_text(body, encoding="utf-8")
+    try:
+        labels = list(dict.fromkeys(config["labels"] + [config["question_label"]]))
+        return create_issue(config["repo"], title, body_path, labels)
+    finally:
+        body_path.unlink(missing_ok=True)
+
+
+def cmd_question(config, pad, path):
+    q = load_json(path, "question")
+    check_schema(q, QUESTION_SCHEMA, "question")
+    title, body = question_title(config, q), question_body(config, q)
+    private = "claim" in q and q["claim"] in load_exploitable(pad)
+    if private:
+        keep_in_questions_md(pad, title, body,
+                             f"private: claim {q['claim']} is flagged exploitable if public")
+        title = f"{review_name(config)} question: a private question is waiting"
+        body = ("A question about one of this review's claims is waiting in its local work pad. "
+                "It is kept private, and walked thru on the owner's return.\n")
+    try:
+        record = file_question_issue(config, pad, title, body)
+    except Failed as e:
+        if private:
+            keep_in_questions_md(pad, title, body, f"the notice for the private question above "
+                                                   f"could not be filed: {e}")
+        else:
+            keep_in_questions_md(pad, title, body, f"it could not be filed: {e}")
+        return 1
+    print(f"filed: {record['url']}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=["dry-run", "post"])
+    parser.add_argument("command", choices=["dry-run", "post", "question"])
+    parser.add_argument("file", nargs="?", help="question: the question's JSON file")
     parser.add_argument("--config", default="docs/review.json",
                         help="the project's review config (default docs/review.json)")
     parser.add_argument("--pad", help="the work pad (default review/<nnnn> from the config)")
@@ -598,6 +693,12 @@ def main(argv=None):
         pad = Path(args.pad or f"review/{config['name']['number']:04d}")
         if not pad.is_dir():
             raise Refused(f"work pad {pad}: not a folder")
+        if args.command == "question":
+            if not args.file:
+                raise Refused("question: name the question's JSON file")
+            return cmd_question(config, pad, args.file)
+        if args.file:
+            raise Refused(f"{args.command} takes no file")
         if args.command == "dry-run":
             return cmd_dry_run(config, pad)
         return cmd_post(config, pad)

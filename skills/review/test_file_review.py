@@ -346,6 +346,83 @@ class FileReviewTest(unittest.TestCase):
             if call[:2] == ["api", "--method"]:
                 self.assertEqual(call[2:4], ["POST", "repos/owner/proj/security-advisories"])
 
+    # ---- question ----
+
+    QUESTION = {
+        "question": "Should a value on the limit be kept?",
+        "options": [{"option": "Keep it", "means": "the limit is inclusive"},
+                    {"option": "Drop it", "means": "the limit is exclusive, as the code does"}],
+        "recommendation": "Keep it: R1.2 says up to and including.",
+        "claim": "U01-1",
+    }
+
+    def ask(self, question=None, **env):
+        path = self.root / "q.json"
+        path.write_text(json.dumps(question or self.QUESTION))
+        return self.run_script("question", str(path), **env)
+
+    def questions_md(self):
+        path = self.pad / "questions.md"
+        return path.read_text() if path.exists() else ""
+
+    def test_question_is_filed_as_a_walk_thru_item(self):
+        done = self.ask()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("filed: https://github.com/owner/proj/issues/101", done.stdout)
+        issue = self.store()["issues"][0]
+        self.assertEqual(issue["title"], "CR1 question: Should a value on the limit be kept?")
+        self.assertEqual(issue["labels"], ["review", "question"])
+        for part in ("**Question:** Should", "1. **Keep it**: the limit is inclusive",
+                     "2. **Drop it**:", "**Recommendation:** Keep it", "**Claim:** U01-1"):
+            self.assertIn(part, issue["body"])
+        self.assertEqual(self.questions_md(), "")
+
+    def test_question_on_an_exploitable_claim_stays_private(self):
+        (self.pad / "exploitable.json").write_text(json.dumps(["U01-1"]))
+        done = self.ask()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        issue = self.store()["issues"][0]
+        self.assertEqual(issue["title"], "CR1 question: a private question is waiting")
+        for text in (issue["title"], issue["body"]):
+            self.assertNotIn("limit", text)
+            self.assertNotIn("U01-1", text)
+        kept = self.questions_md()
+        self.assertIn("private: claim U01-1 is flagged exploitable", kept)
+        self.assertIn("**Recommendation:** Keep it", kept)
+
+    def test_question_that_cannot_be_filed_is_kept(self):
+        done = self.ask(STUB_FAIL_AT="1")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.store()["issues"], [])
+        kept = self.questions_md()
+        self.assertIn("it could not be filed", kept)
+        self.assertIn("stub failure", kept)
+        self.assertIn("**Question:** Should a value on the limit be kept?", kept)
+
+    def test_question_failing_the_text_check_is_kept_not_filed(self):
+        question = dict(self.QUESTION, recommendation="Keep it, says FORBIDDEN.")
+        done = self.ask(question)
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.posting_calls(), [])
+        kept = self.questions_md()
+        self.assertIn("text check failed", kept)
+        self.assertIn("FORBIDDEN", kept)
+
+    def test_private_notice_that_cannot_be_filed_is_kept_too(self):
+        (self.pad / "exploitable.json").write_text(json.dumps(["U01-1"]))
+        done = self.ask(STUB_FAIL_AT="1")
+        self.assertEqual(done.returncode, 1)
+        kept = self.questions_md()
+        self.assertIn("private: claim U01-1", kept)
+        self.assertIn("the notice for the private question above could not be filed", kept)
+
+    def test_bad_question_names_its_field(self):
+        question = dict(self.QUESTION, options=[{"option": "Only one", "means": "no choice"}])
+        done = self.ask(question)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("question.options: needs at least 2 items", done.stderr)
+        self.assertEqual(self.posting_calls(), [])
+
     # ---- refusals ----
 
     def refused(self, needle):
