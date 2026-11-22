@@ -1,33 +1,37 @@
 #!/usr/bin/env python3
-"""File a code review's findings: one issue per finding, each a sub-issue of its area's step in the
-review's sweep, a draft security advisory for each finding marked exploitable, and the summary as a
-comment on the review's own step; and post a pull request review's passes. See filing.md beside this
-script.
+"""File a code review's findings: one issue per finding, each a sub-issue of its area's step under
+the review's anchor, a draft security advisory for each finding marked exploitable, and the summary
+as a comment on the anchor; lay out the review's sweep first; and post a pull request review's
+passes. See filing.md beside this script.
 
-    file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
-    file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
-    file_review.py question <question.json> [--config docs/review.json] [--pad review/<nnnn>]
+    file_review.py plan [--dry-run] [--sweep CR1] [--config docs/review.json]
+    file_review.py dry-run [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
+    file_review.py post    [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
+    file_review.py question <question.json> [--sweep CR1] [--config ...] [--pad review/<N>]
     file_review.py pr post <n> [--config docs/review.json] [--pad review/pr-<n>]
     file_review.py pr file <n> (<id> ... | --all) [--config docs/review.json] [--pad review/pr-<n>]
     file_review.py respond <n> [--config docs/review.json] [--pad review/pr-<n>]
 
-`dry-run` writes the whole plan to <pad>/filing-dry-run.md, each finding's parent and numbered title
-included, and posts nothing; it reads the sweep label and the review's own step from <pad>/sweep.json.
+The review is <prefix><N> (CR1): named by --sweep, or by the branch code-review-<N> it runs on.
+`plan`, the Planning step, makes the next sweep's label sweep:<prefix><N+1>, its anchor issue and one
+step per area as the anchor's sub-issues, each found again by its marker, so a run that stopped
+finishes rather than repeats; --dry-run says what it would make. `dry-run` writes the whole plan to
+<pad>/filing-dry-run.md, each finding's parent and numbered title included, and posts nothing.
 `post` posts exactly that plan through the gh CLI: each finding is filed, then attached under its
 parent, both kept in <pad>/filing-state.json so a run that stopped does only what is missing; the
 marker each body ends with lets it find, rather than repeat, an item it made but didn't record.
-`question` files one question for the owner as a walk-thru issue under its area's step, or keeps it in
-<pad>/questions.md when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull
-request review's latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on
-earlier findings' threads; `pr file` files the additional findings the owner chose, in the sweep of the
-pull request's sweep label if it has one. Both keep <pad>/pr-state.json, find what an earlier run
-posted by its marker, and leave out every claim flagged exploitable and every question for the owner.
-`respond` posts the author's round, <pad>/round-<k>.json: its replies on the reviewers' threads and one
-comment on the pull request, refusing any commit not on the pull request's branch, keeping
-<pad>/respond-state.json. The `pr` and `respond` commands, and the summary's lookup on its step, read
-only the comments of the project's owners, members and collaborators. It never closes or edits an
-issue, never makes a parent, and never resolves, approves or requests changes. Python 3 standard
-library only.
+`question` files one question for the owner as a walk-thru issue under its area's step, or keeps it
+in <pad>/questions.md when it can't be filed or its claim is flagged exploitable. `pr post` posts a
+pull request review's latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its
+replies on earlier findings' threads; `pr file` files the additional findings the owner chose, in
+the sweep of the pull request's sweep label if it has one. Both keep <pad>/pr-state.json, find what
+an earlier run posted by its marker, and leave out every claim flagged exploitable and every
+question for the owner. `respond` posts the author's round, <pad>/round-<k>.json: its replies on the
+reviewers' threads and one comment on the pull request, refusing any commit not on the pull
+request's branch, keeping <pad>/respond-state.json. The `pr` and `respond` commands, and the
+summary's lookup on the anchor, read only the comments of the project's owners, members and
+collaborators. It never closes or edits an issue, never makes a parent outside `plan`, and never
+resolves, approves or requests changes. Python 3 standard library only.
 
 Exit status: 0 done; 1 a text check, a parent search or a gh call failed (what was posted is kept; a
 question is kept in questions.md); 2 refused (a bad config or input, or a plan that doesn't match the
@@ -42,6 +46,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -52,7 +57,6 @@ STATE_FILE = "filing-state.json"
 FINDINGS_FILE = "findings.jsonl"
 SUMMARY_FILE = "summary.json"
 EXPLOITABLE_FILE = "exploitable.json"
-SWEEP_FILE = "sweep.json"
 QUESTIONS_FILE = "questions.md"
 CHECK_FILE = ".text-check.md"
 
@@ -210,8 +214,9 @@ def load_findings(pad):
         except json.JSONDecodeError as e:
             raise Refused(f"{FINDINGS_FILE} line {n}: not JSON ({e.msg})")
         check_schema(record, FINDING_SCHEMA, f"{FINDINGS_FILE} line {n}")
-        if record["id"] == "summary":
-            raise Refused(f"{FINDINGS_FILE} line {n}.id: \"summary\" is the summary's own")
+        if record["id"] in PLAN_KEYS:
+            raise Refused(f"{FINDINGS_FILE} line {n}.id: \"{record['id']}\" is the "
+                          f"{record['id']}'s own")
         if record["id"] in seen:
             raise Refused(f"{FINDINGS_FILE} line {n}.id: {record['id']} is used twice")
         seen.add(record["id"])
@@ -241,31 +246,46 @@ def load_summary(pad):
 
 SWEEP_PREFIX = "sweep:"
 
-SWEEP_SCHEMA = {
-    "type": "object",
-    "required": ["label"],
-    "additionalProperties": False,
-    "properties": {
-        "label": {"type": "string", "pattern": r"^sweep:\S+$"},
-        "step": {"type": ["integer", "null"], "minimum": 1},
-    },
-}
+
+def prefix_of(config):
+    return config.get("prefix", "CR")
 
 
-def load_sweep(pad):
-    """The review's sweep label and its own step, from sweep.json, which Phase 0 writes."""
-    path = pad / SWEEP_FILE
-    if not path.exists():
-        raise Refused(f"{path}: missing; every review is a sweep: Phase 0 writes its sweep label "
-                      f"(and the review's own step) there, as {{\"label\": \"sweep:H1\", "
-                      f"\"step\": 41}}")
-    sweep = load_json(path, "sweep")
-    check_schema(sweep, SWEEP_SCHEMA, SWEEP_FILE)
-    sweep.setdefault("step", None)
-    return sweep
+def sweep_label(config):
+    return SWEEP_PREFIX + review_name(config)
 
 
-# ---- the sweep: parents and numbered titles ----
+def name_review(config, number):
+    """Names the review <prefix><N>: its sweep label, anchor, step ids, markers, branch, work pad."""
+    config["review_number"] = number
+    return config
+
+
+def current_branch():
+    try:
+        done = subprocess.run(["git", "symbolic-ref", "--short", "HEAD"], capture_output=True,
+                              text=True)
+    except OSError:
+        return None
+    return done.stdout.strip() if done.returncode == 0 else None
+
+
+def find_sweep(config, given):
+    """The review's number: from --sweep CR1, else from the branch code-review-<N>."""
+    prefix = prefix_of(config)
+    if given:
+        m = re.fullmatch(rf"{re.escape(prefix)}([1-9][0-9]*)", given)
+        if not m:
+            raise Refused(f"--sweep {given}: not {prefix}<N>, such as {prefix}1")
+        return int(m.group(1))
+    m = re.fullmatch(r"code-review-([1-9][0-9]*)", current_branch() or "")
+    if not m:
+        raise Refused(f"which review? Run on its branch code-review-<N>, or name it: "
+                      f"--sweep {prefix}<N>")
+    return int(m.group(1))
+
+
+# ---- the sweep: the anchor, its steps, and numbered titles ----
 
 OPEN_ISSUES_QUERY = """query($owner: String!, $name: String!, $label: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -276,71 +296,71 @@ OPEN_ISSUES_QUERY = """query($owner: String!, $name: String!, $label: String!, $
   }
 }"""
 
-STEP_ID = re.compile(r"^([A-Za-z]+[0-9]+(?:\.[0-9]+)+)(?=\s|$)")
+STEP_ID = re.compile(r"^([A-Za-z]+[0-9]+(?:\.[0-9]+)*)(?=\s|$)")
+PLAN_KEYS = ("anchor", "summary")
 
 
 def is_finding(body):
-    """Whether an issue's body carries a finding's marker: a review's, or a pull request review's
-    filed issue. A finding is never a parent."""
-    return bool(MARKER.search(body)) or \
+    """Whether an issue's body carries a finding's marker (a review's finding or question, or a
+    pull request review's filed issue). A finding is never a parent. The anchor's marker and a
+    step's are not a finding's."""
+    return any(m.group(2) not in PLAN_KEYS for m in MARKER.finditer(body)) or \
         any(m.group(2).endswith(" issue") for m in PR_MARKER.finditer(body))
 
 
 def step_id(title):
-    """The leading id of a step's title, "H1.6" of "H1.6 Trust and signatures", or None."""
+    """The leading id of a parent's title, "CR1.3" of "CR1.3 trust" and "CR1" of "CR1 Code
+    review", or None."""
     m = STEP_ID.match(title)
     return m.group(1) if m else None
 
 
 class Sweep:
-    """A sweep's open issues, read once a run: the issues that may be a parent are those with the
-    sweep label, no parent of their own and no finding's marker. The script never makes one."""
+    """A sweep's issues, read once a run. Its anchor is the one open issue with the sweep label, no
+    parent and no finding's marker; its steps are the anchor's open sub-issues that are no finding.
+    The script never makes a parent outside `plan`."""
 
-    def __init__(self, config, label, step=None):
-        self.config, self.label, self.step = config, label, None
+    def __init__(self, config, label):
+        self.config, self.label = config, label
         owner, name = config["repo"].split("/")
         out = run(["gh", "api", "graphql", "--paginate", "-f", f"query={OPEN_ISSUES_QUERY}",
                    "-f", f"owner={owner}", "-f", f"name={name}", "-f", f"label={label}"],
                   f"gh api graphql (the open issues labelled {label})")
-        self.candidates = []
-        for page in json_values(out):
-            for node in page["data"]["repository"]["issues"]["nodes"]:
-                if node.get("parent") or is_finding(node.get("body") or ""):
-                    continue
-                self.candidates.append({"number": node["number"], "title": node["title"],
-                                        "labels": [x["name"] for x in node["labels"]["nodes"]]})
+        anchors = [{"number": node["number"], "title": node["title"]}
+                   for page in json_values(out)
+                   for node in page["data"]["repository"]["issues"]["nodes"]
+                   if not node.get("parent") and not is_finding(node.get("body") or "")]
+        if len(anchors) != 1:
+            found = ", ".join(f"#{a['number']}" for a in anchors)
+            raise Refused(f"the sweep {label} has {len(anchors)} open issues with no parent "
+                          f"and no finding's marker{' (' + found + ')' if found else ''}: it needs "
+                          "one, its anchor, which the Planning step makes (file_review.py plan)")
+        self.anchor = anchors[0]
         self._subs = {}
-        if step is not None:
-            self.step = next((i for i in self.candidates if i["number"] == step), None)
-            if self.step is None:
-                raise Refused(f"{SWEEP_FILE}.step: #{step} is not an open issue labelled {label} "
-                              "with no parent of its own and no finding's marker")
+        self.steps = [s for s in self.sub_issues(self.anchor["number"])
+                      if s["state"] == "open" and not is_finding(s["body"])]
 
     def parent(self, area):
-        """(issue, None), (None, None) when there is no parent, or (None, why) when the search
-        fails. A finding no area owns goes under the review's own step, when there is one."""
+        """(issue, None), or (None, why) when the search fails. A finding no area owns goes under
+        the anchor."""
         if area is None:
-            return self.step, None
+            return self.anchor, None
         label = self.config["area_prefix"] + area
-        matches = [i for i in self.candidates if label in i["labels"]]
+        matches = [s for s in self.steps if label in s["labels"]]
         if len(matches) == 1:
             return matches[0], None
+        anchor = f"#{self.anchor['number']}"
         if not matches:
-            return None, (f"area {area}: no open issue labelled {label} and {self.label} with no "
-                          "parent of its own; the sweep's planning makes its steps")
-        return None, (f"area {area}: {len(matches)} open issues could be its parent ("
-                      + ", ".join(f"#{i['number']}" for i in matches)
-                      + "); an area has at most one open step")
+            return None, (f"area {area}: no open sub-issue of the anchor {anchor} is labelled "
+                          f"{label}; the Planning step makes the steps")
+        return None, (f"area {area}: {len(matches)} open sub-issues of the anchor {anchor} are "
+                      "labelled " + label + " (" + ", ".join(f"#{i['number']}" for i in matches)
+                      + "); an area has one step")
 
     def sub_issues(self, number):
         """The parent's sub-issues in every state, read once a run."""
         if number not in self._subs:
-            out = run(["gh", "api", "--paginate",
-                       f"repos/{self.config['repo']}/issues/{number}/sub_issues?per_page=100"],
-                      f"gh api issues/{number}/sub_issues (list)")
-            self._subs[number] = [{"number": i["number"], "title": i["title"],
-                                   "body": i.get("body") or ""}
-                                  for page in json_values(out) for i in page]
+            self._subs[number] = sub_issues(self.config, number)
         return self._subs[number]
 
     def titles(self, entries, own):
@@ -365,10 +385,20 @@ class Sweep:
         return titles
 
 
-def attach(config, sweep, parent, record, body_path):
-    """Make the issue in record a sub-issue of parent, unless it is one already."""
+def sub_issues(config, number):
+    out = run(["gh", "api", "--paginate",
+               f"repos/{config['repo']}/issues/{number}/sub_issues?per_page=100"],
+              f"gh api issues/{number}/sub_issues (list)")
+    return [{"number": i["number"], "title": i["title"], "body": i.get("body") or "",
+             "state": i.get("state", "open"), "labels": [x["name"] for x in i.get("labels", [])]}
+            for page in json_values(out) for i in page]
+
+
+def attach(config, subs, parent, record, body_path):
+    """Make the issue in record a sub-issue of parent, unless subs (the parent's sub-issues, read
+    this run) already holds it."""
     n, repo = record["number"], config["repo"]
-    if any(s["number"] == n for s in sweep.sub_issues(parent)):
+    if any(s["number"] == n for s in subs):
         print(f"#{n}: a sub-issue of #{parent} already; recorded")
         return parent
     out = run(["gh", "api", f"repos/{repo}/issues/{n}", "--jq", ".id"], f"gh api issues/{n}")
@@ -395,14 +425,15 @@ def run(argv, what, stdin=None):
 
 
 def list_areas(config):
+    """The project's areas, in their order: areas_command's, else the labels' sorted by name."""
     if "areas_command" in config:
         out = run(shlex.split(config["areas_command"]), "areas_command")
-        return {line.strip() for line in out.splitlines() if line.strip()}
+        return list(dict.fromkeys(line.strip() for line in out.splitlines() if line.strip()))
     out = run(["gh", "label", "list", "--repo", config["repo"], "--limit", "1000",
                "--json", "name"], "gh label list")
     prefix = config["area_prefix"]
-    return {label["name"][len(prefix):] for label in json.loads(out)
-            if label["name"].startswith(prefix)}
+    return sorted(label["name"][len(prefix):] for label in json.loads(out)
+                  if label["name"].startswith(prefix))
 
 
 def text_check(config, pad, title, body):
@@ -424,7 +455,7 @@ def text_check(config, pad, title, body):
 # ---- the plan ----
 
 def review_name(config):
-    return f"{config['name']['prefix']}{config['name']['number']}"
+    return f"{prefix_of(config)}{config['review_number']}"
 
 
 def fence(text, mark="`"):
@@ -479,15 +510,15 @@ def link_placeholder(finding_id):
 
 def summary_body(config, summary, items, links, sweep):
     """links maps a finding's id to its issue link; ids not in it get a placeholder."""
-    n = config["name"]["number"]
-    branch = f"code-review-{n:04d}"
+    n = config["review_number"]
+    branch = f"code-review-{n}"
     lines = [
-        f"**Sweep:** `{sweep['label']}`",
+        f"**Sweep:** `{sweep['label']}`, anchor #{sweep['anchor']}",
         f"**Commit read:** {summary['commit']}",
         "**Delta from:** " + (summary["base_commit"] or
                               "none: the project's first review, read in full"),
         f"**Method:** the `review` skill at {summary['skill_commit']}",
-        f"**Work pad:** `review/{n:04d}/` on the local branch `{branch}`, last commit "
+        f"**Work pad:** `review/{n}/` on the local branch `{branch}`, last commit "
         f"{summary['branch_commit']}, kept until the next review has read it",
         f"**Scope:** {summary['scope']}",
         f"**Checking:** {summary['checking']}",
@@ -545,10 +576,10 @@ def own_markers(keys, ids):
 def build_plan(config, pad):
     findings = load_findings(pad)
     summary = load_summary(pad)
-    sweep_record = load_sweep(pad)
     areas = list_areas(config)
     flagged = load_exploitable(pad)
-    sweep = Sweep(config, sweep_record["label"], sweep_record["step"])
+    sweep = Sweep(config, sweep_label(config))
+    sweep_record = {"label": sweep.label, "anchor": sweep.anchor["number"]}
     items, entries, failures = [], [], []
     for f in findings:
         check_area(f, areas, FINDINGS_FILE)
@@ -576,7 +607,6 @@ def build_plan(config, pad):
     titles = sweep.titles(entries, own_markers(review_keys(config), ids))
     for item in items:
         item["title"] = titles.get(item["id"], item["title"])
-    step = sweep_record["step"]
     return {
         "repo": config["repo"],
         "sweep": sweep_record,
@@ -584,8 +614,8 @@ def build_plan(config, pad):
         "failures": failures,
         "summary": {"title": f"{review_name(config)}: summary",
                     "body": summary_body(config, summary, items, {}, sweep_record),
-                    "on": step, "data": summary},
-        "records": {"findings": findings, "summary": summary, "sweep": sweep_record},
+                    "on": sweep_record["anchor"], "data": summary},
+        "records": {"findings": findings, "summary": summary, "sweep": sweep_record["label"]},
         "sweep_issues": sweep,
     }
 
@@ -617,9 +647,7 @@ def parent_line(item):
     if item["type"] == "summary":
         return "- parent: none"
     if item["parent"] is None:
-        why = item.get("why")
-        return f"- parent: FAILED: {why}" if why else \
-            "- parent: none (no area, and no step for the review)"
+        return f"- parent: FAILED: {item.get('why')}"
     return f"- parent: #{item['parent']} {item['parent_title']}"
 
 
@@ -629,22 +657,18 @@ def write_dry_run(config, pad, plan, failures):
            f"plan sha256: {plan_hash(plan)}",
            f"records sha256: {records_hash(plan)}", "",
            f"Repository: {plan['repo']}. Nothing was posted. `post` posts exactly this plan: to "
-           f"change it, change `{FINDINGS_FILE}`, `{SUMMARY_FILE}` or `{SWEEP_FILE}` and run the "
-           "dry run again.", "",
-           f"Sweep: `{sweep['label']}`; the review's own step: "
-           + (f"#{step}." if step else "none given."), ""]
+           f"change it, change `{FINDINGS_FILE}` or `{SUMMARY_FILE}` and run the dry run again.",
+           "", f"Sweep: `{sweep['label']}`; its anchor: #{step}.", ""]
     n_adv = sum(1 for i in plan["items"] if i["type"] == "advisory")
     n_issues = len(plan["items"]) - n_adv
     out.append(f"Findings: {n_issues} as public issues, {n_adv} as draft security advisories; "
-               + (f"then the summary, as a comment on #{step}." if step
-                  else "then the summary issue."))
+               f"then the summary, as a comment on the anchor #{step}.")
     out.append("")
     if plan["failures"]:
         out += ["Parents: FAILED, so `post` refuses this plan:", ""] + \
             [f"- {why}" for why in plan["failures"]] + [""]
     else:
-        out += ["Parents: one found for every finding that has an area or goes under the review's "
-                "own step.", ""]
+        out += ["Parents: one found for every finding: its area's step, or the anchor.", ""]
     if "text_check" not in config:
         out.append("Text check: none configured.")
     elif failures:
@@ -664,10 +688,8 @@ def write_dry_run(config, pad, plan, failures):
             where = f"draft security advisory, private, severity {item['severity']}"
         elif item["type"] == "issue":
             where = "public issue"
-        elif step:
-            where = f"a comment on #{step}: the summary, posted last, with each finding's link"
         else:
-            where = "public issue: the summary, posted last, with each finding's link"
+            where = f"a comment on #{step}: the summary, posted last, with each finding's link"
         mark = fence(item["body"])
         out += [f"## {k}. {item['id']}: {where}", "",
                 f"- title: {item['title']}",
@@ -859,20 +881,18 @@ def cmd_post(config, pad):
                 create = issue(item["title"], item["body"], item["labels"])
             record = post_one(item["id"], item["type"], item["title"], item["body"], create)
             if item["parent"] and not record.get("attached"):
-                record["attached"] = attach(config, sweep, item["parent"], record, body_path)
+                record["attached"] = attach(config, sweep.sub_issues(item["parent"]),
+                                            item["parent"], record, body_path)
                 write_state(pad, state)
         links = {i: f"#{r['number']}" for i, r in posted.items() if r.get("type") == "issue"}
         title = plan["summary"]["title"]
         body = summary_body(config, plan["summary"]["data"], plan["items"], links, plan["sweep"])
         step = plan["summary"]["on"]
-        if step:
-            post_one("summary", "comment", title, body,
-                     lambda: gh_post(f"repos/{plan['repo']}/issues/{step}/comments",
-                                     {"body": body}, body_path,
-                                     f"gh api issues/{step}/comments (the summary)"),
-                     lookup=lambda: step_comment_posted(config, step, "summary"))
-        else:
-            post_one("summary", "summary", title, body, issue(title, body, []))
+        post_one("summary", "comment", title, body,
+                 lambda: gh_post(f"repos/{plan['repo']}/issues/{step}/comments",
+                                 {"body": body}, body_path,
+                                 f"gh api issues/{step}/comments (the summary)"),
+                 lookup=lambda: step_comment_posted(config, step, "summary"))
         return 0
     finally:
         body_path.unlink(missing_ok=True)
@@ -903,11 +923,17 @@ QUESTION_SCHEMA = {
 }
 
 
-def question_title(config, q):
+def question_title(q):
     first = q["question"].strip().splitlines()[0]
     if len(first) > 100:
         first = first[:97].rstrip() + "..."
-    return f"{review_name(config)} question: {first}"
+    return f"Question: {first}"
+
+
+def question_key(q):
+    """The question's marker id: the same question always gives the same one."""
+    text = json.dumps({k: v for k, v in q.items()}, sort_keys=True)
+    return "question-" + hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
 def question_body(config, q):
@@ -919,7 +945,8 @@ def question_body(config, q):
         lines.append(f"**Claim:** {q['claim']}, in the work pad of review {review_name(config)}")
     else:
         lines.append(f"**Review:** {review_name(config)}")
-    lines += ["", "Walked thru on the owner's return; the answer is a comment here."]
+    lines += ["", "Walked thru on the owner's return; the answer is a comment here.", "",
+              marker(config, question_key(q))]
     return "\n".join(lines) + "\n"
 
 
@@ -942,23 +969,34 @@ def file_question_issue(config, pad, title, body, labels):
         body_path.unlink(missing_ok=True)
 
 
+def find_issue_by_marker(config, key):
+    """The issue, in any state, whose body carries this review's marker for key; else None."""
+    out = run(["gh", "issue", "list", "--repo", config["repo"], "--state", "all", "--limit",
+               "10000", "--json", "number,url,body"], "gh issue list")
+    for issue in json.loads(out):
+        if key in review_keys(config)(issue.get("body") or ""):
+            return {"number": issue["number"], "url": issue["url"]}
+    return None
+
+
 def cmd_question(config, pad, path):
     q = load_json(path, "question")
     check_schema(q, QUESTION_SCHEMA, "question")
-    sweep_record = load_sweep(pad)
-    title, body = question_title(config, q), question_body(config, q)
+    title, body = question_title(q), question_body(config, q)
+    key = question_key(q)
     private = "claim" in q and q["claim"] in load_exploitable(pad)
     area = q["area"]
     if private:
         keep_in_questions_md(pad, title, body,
                              f"private: claim {q['claim']} is flagged exploitable if public")
-        title = f"{review_name(config)} question: a private question is waiting"
-        body = ("A question about one of this review's claims is waiting in its local work pad. "
-                "It is kept private, and walked thru on the owner's return.\n")
-        area = None  # its area would say where to look: the notice goes under the review's step
+        title = "Question: a private question is waiting"
+        body = (f"A question about one of review {review_name(config)}'s claims is waiting in its "
+                "local work pad. It is kept private, and walked thru on the owner's return.\n\n"
+                + marker(config, key) + "\n")
+        area = None  # its area would say where to look: the notice goes under the anchor
     why_kept = (lambda e: f"the notice for the private question above could not be filed: {e}") \
         if private else (lambda e: f"it could not be filed: {e}")
-    labels = list(config["labels"]) + [config["question_label"], sweep_record["label"]]
+    labels = list(config["labels"]) + [config["question_label"], sweep_label(config)]
     try:
         if q["area"] is not None:
             areas = list_areas(config)
@@ -967,26 +1005,31 @@ def cmd_question(config, pad, path):
                               f"({', '.join(sorted(areas)) or 'none listed'})")
         if area is not None:
             labels.append(config["area_prefix"] + area)
-        sweep = Sweep(config, sweep_record["label"], sweep_record["step"])
+        sweep = Sweep(config, sweep_label(config))
         parent, why = sweep.parent(area)
         if why:
             raise Failed(f"no parent for the question's {why}")
-        title = sweep.titles([("q", parent, title)], lambda body: False)["q"]
-        record = file_question_issue(config, pad, title, body, list(dict.fromkeys(labels)))
+        own = lambda b: key in review_keys(config)(b)
+        title = sweep.titles([("q", parent, title)], own)["q"]
+        record = find_issue_by_marker(config, key)
+        if record:
+            print(f"found already filed as {record['url']}; not filed again")
+        else:
+            record = file_question_issue(config, pad, title, body, list(dict.fromkeys(labels)))
+            print(f"filed: {record['url']}")
     except (Failed, Refused) as e:
         keep_in_questions_md(pad, title, body, why_kept(e))
         return 1
-    print(f"filed: {record['url']}")
-    if parent:
-        body_path = pad / ".question-body"
-        try:
-            attach(config, sweep, parent["number"], record, body_path)
-        except Failed as e:
-            keep_in_questions_md(pad, title, body, f"filed as {record['url']}, but not made a "
-                                 f"sub-issue of #{parent['number']}: {e}")
-            return 1
-        finally:
-            body_path.unlink(missing_ok=True)
+    body_path = pad / ".question-body"
+    try:
+        attach(config, sweep.sub_issues(parent["number"]), parent["number"], record, body_path)
+    except Failed as e:
+        keep_in_questions_md(pad, title, body, f"filed as {record['url']}, but not made a "
+                             f"sub-issue of #{parent['number']}; run question again to attach "
+                             f"it: {e}")
+        return 1
+    finally:
+        body_path.unlink(missing_ok=True)
     return 0
 
 
@@ -1394,7 +1437,8 @@ def cmd_pr_file(config, pad, n, chosen, every):
     def then(item):
         if not item.get("parent"):
             return None
-        return lambda record: attach(config, sweep, item["parent"], record, body_path)
+        return lambda record: attach(config, sweep.sub_issues(item["parent"]), item["parent"],
+                                     record, body_path)
 
     try:
         post_items(pad, [(key, kind, f"{i['title']}\n{i['body']}",
@@ -1617,22 +1661,148 @@ def cmd_respond(config, pad, n):
     return 0
 
 
+# ---- the Planning step: plan ----
+
+PLAN_MARKER = re.compile(r"<!-- review (\S+) (anchor|step [^<>]+?) -->")
+
+
+def plan_items(config, areas):
+    """(key, title, body, labels): the anchor, then one step per area in the areas' order."""
+    name, label = review_name(config), sweep_label(config)
+    base = list(config["labels"]) + [label]
+    lines = [f"Code review {name}, the sweep `{label}`. Its steps, one per area, are this issue's "
+             "sub-issues, and each step's findings are that step's. A finding no area owns and a "
+             "question about the review itself are this issue's, and the review's summary is a "
+             "comment here.", "", "**Steps**", ""]
+    lines += [f"- {name}.{k} {area}" for k, area in enumerate(areas, 1)]
+    lines += ["", marker(config, "anchor")]
+    items = [("anchor", f"{name} Code review", "\n".join(lines) + "\n", list(dict.fromkeys(base)))]
+    for k, area in enumerate(areas, 1):
+        body = (f"Step {name}.{k} of code review {name}: the area `{area}`. Its findings are this "
+                f"issue's sub-issues.\n\n{marker(config, 'step ' + area)}\n")
+        items.append((f"step {area}", f"{name}.{k} {area}", body,
+                      list(dict.fromkeys(base + [config["area_prefix"] + area]))))
+    return items
+
+
+def plan_found(config, issues):
+    """{key: issue} of this review's anchor and steps, found by their markers in any state."""
+    found = {}
+    for issue in issues:
+        for m in PLAN_MARKER.finditer(issue.get("body") or ""):
+            if m.group(1) == review_name(config):
+                found.setdefault(m.group(2), {"number": issue["number"], "url": issue["url"]})
+    return found
+
+
+def cmd_plan(config, given, dry):
+    repo = config["repo"]
+    out = run(["gh", "label", "list", "--repo", repo, "--limit", "1000", "--json", "name"],
+              "gh label list")
+    labels = [x["name"] for x in json.loads(out)]
+    areas = list_areas(config)
+    if not areas:
+        raise Refused("no areas: a sweep has one step per area")
+    pattern = re.compile(rf"^{re.escape(SWEEP_PREFIX + prefix_of(config))}([1-9][0-9]*)$")
+    numbers = [int(m.group(1)) for x in labels for m in [pattern.match(x)] if m]
+    last = max(numbers, default=0)
+    out = run(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "10000",
+               "--json", "number,url,body"], "gh issue list")
+    issues = json.loads(out)
+    if given:
+        n = find_sweep(config, given)
+        if n not in numbers and n != last + 1:
+            raise Refused(f"--sweep {given}: no label {SWEEP_PREFIX}{given}, and the next sweep "
+                          f"is {prefix_of(config)}{last + 1}")
+    else:
+        n = last + 1
+        if last and "anchor" not in plan_found(name_review(config, last), issues):
+            n = last  # a plan that stopped after making its label: it is finished, not a new one
+            print(f"{SWEEP_PREFIX}{prefix_of(config)}{last} has no anchor yet: finishing its plan")
+    name_review(config, n)
+    name, label = review_name(config), sweep_label(config)
+    found = plan_found(config, issues)
+    items = plan_items(config, areas)
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for key, title, body, _ in items:
+            if key in found:
+                continue
+            result = text_check(config, Path(tmp), title, body)
+            if result is not None:
+                failures.append(key)
+                print(f"text check failed for {key}:\n{result}", file=sys.stderr)
+    anchor = found.get("anchor")
+    attached = {s["number"] for s in sub_issues(config, anchor["number"])} if anchor else set()
+    print(f"{name}: the label {label} " + ("exists" if label in labels else
+                                          "is made" if not dry else "would be made"))
+    for key, title, _, item_labels in items:
+        if key in found:
+            state = f"#{found[key]['number']}, made earlier"
+            if key != "anchor" and found[key]["number"] not in attached:
+                state += ", not yet a sub-issue of the anchor"
+        else:
+            state = "would be made" if dry else "to make"
+        print(f"- {title} [{', '.join(item_labels)}]: {state}")
+    print(f"the review's branch: code-review-{n}, its work pad review/{n}/")
+    if dry:
+        return 1 if failures else 0
+    if failures:
+        raise Failed(f"text check failed for {', '.join(failures)}; nothing made")
+    resume = f"; run plan --sweep {name} to finish it"
+    with tempfile.TemporaryDirectory() as tmp:
+        body_path = Path(tmp) / "body"
+        try:
+            if label not in labels:
+                run(["gh", "label", "create", label, "--repo", repo, "--description",
+                     f"Code review {name}'s sweep"], f"gh label create {label}")
+                print(f"made the label {label}")
+            for key, title, body, item_labels in items:
+                record = found.get(key)
+                if not record:
+                    body_path.write_text(body, encoding="utf-8")
+                    record = create_issue(repo, title, body_path, item_labels)
+                    print(f"{key}: {record['url']}")
+                if key == "anchor":
+                    anchor = record
+                    continue
+                attach(config, [{"number": x} for x in attached], anchor["number"], record,
+                       body_path)
+        except Failed as e:
+            raise Failed(f"{e}{resume}")
+    print(f"{name}: planned, the anchor #{anchor['number']}")
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=["dry-run", "post", "question", "pr", "respond"])
+    parser.add_argument("command",
+                        choices=["plan", "dry-run", "post", "question", "pr", "respond"])
     parser.add_argument("args", nargs="*", help="question: the question's JSON file; "
                         "pr: post <n>, or file <n> and the ids to file; respond: <n>")
     parser.add_argument("--all", action="store_true",
                         help="pr file: every additional finding of the latest pass")
     parser.add_argument("--config", default="docs/review.json",
                         help="the project's review config (default docs/review.json)")
-    parser.add_argument("--pad", help="the work pad (default review/<nnnn> from the config, "
+    parser.add_argument("--pad", help="the work pad (default review/<N> from the sweep, "
                         "or review/pr-<n>)")
+    parser.add_argument("--sweep", help="the review, <prefix><N> such as CR1 (default: from the "
+                        "branch code-review-<N>; for plan, the next sweep)")
+    parser.add_argument("--dry-run", action="store_true", dest="plan_dry",
+                        help="plan: say what it would make, and make nothing")
     args = parser.parse_args(argv)
     try:
         if args.all and (args.command != "pr" or args.args[:1] != ["file"]):
             raise Refused("--all is for pr file only")
         config = load_config(args.config)
+        if args.plan_dry and args.command != "plan":
+            raise Refused("--dry-run is for plan only; the filing's dry run is dry-run")
+        if args.sweep and args.command in ("pr", "respond"):
+            raise Refused("--sweep is not for pr or respond: a pull request's sweep is its label")
+        if args.command == "plan":
+            if args.args:
+                raise Refused("plan takes no file")
+            return cmd_plan(config, args.sweep, args.plan_dry)
         if args.command == "respond":
             if len(args.args) != 1 or not re.fullmatch(r"[1-9][0-9]*", args.args[0]):
                 raise Refused("respond: <n>, the pull request's number")
@@ -1656,7 +1826,9 @@ def main(argv=None):
             if bool(rest) == args.all:
                 raise Refused("pr file: name the ids to file, or --all, not both")
             return cmd_pr_file(config, pad, n, rest, args.all)
-        pad = Path(args.pad or f"review/{config['name']['number']:04d}")
+        number = find_sweep(config, args.sweep)
+        name_review(config, number)
+        pad = Path(args.pad or f"review/{number}")
         if not pad.is_dir():
             raise Refused(f"work pad {pad}: not a folder")
         if args.command == "question":

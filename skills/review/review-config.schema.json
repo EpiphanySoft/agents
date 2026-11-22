@@ -3,7 +3,7 @@
   "title": "A project's code review config (docs/review.json)",
   "description": "Read by the review skill's file_review.py. The script checks a config against this schema and refuses one that doesn't match, naming the field. It knows the keywords used here: type, required, properties, additionalProperties, enum, pattern, minLength, minimum, items, uniqueItems.",
   "type": "object",
-  "required": ["repo", "name", "area_prefix"],
+  "required": ["repo", "area_prefix"],
   "additionalProperties": false,
   "properties": {
     "$schema": {
@@ -15,21 +15,10 @@
       "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
       "description": "The repository the issues and advisories are filed in, as owner/name."
     },
-    "name": {
-      "type": "object",
-      "required": ["prefix", "number"],
-      "additionalProperties": false,
-      "description": "The review's name: prefix \"CR\" and number 1 give the summary \"CR1: summary\", the branch code-review-0001 and the work pad review/0001.",
-      "properties": {
-        "prefix": {
-          "type": "string",
-          "pattern": "^[A-Za-z][A-Za-z0-9]*$"
-        },
-        "number": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
+    "prefix": {
+      "type": "string",
+      "pattern": "^[A-Za-z]+$",
+      "description": "Optional, \"CR\" when left out. The start of every review's name: prefix \"CR\" and the sweep label sweep:CR1 name the review CR1, its anchor, its steps CR1.1, its branch code-review-1 and its work pad review/1. The review's number comes from its sweep, never from this file."
     },
     "area_prefix": {
       "type": "string",
