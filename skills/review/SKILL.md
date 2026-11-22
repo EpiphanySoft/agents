@@ -329,8 +329,8 @@ run unit 07 (Phase 2, then Checking), on <model> at <effort>. Start from log.md 
 
 Each piece runs on a named model and a named effort level, never a tool's default: defaults differ
 between tools and change with releases. The Phase 0 proposal names them for every piece, with the
-estimated tokens by model and an Opus-equivalent total (each model's tokens weighted by its price
-ratio to Opus), and `log.md` records what each piece ran on.
+estimated tokens by model and a next-equivalent total (each model's tokens weighted by its price
+relative to the next level's model), and `log.md` records what each piece ran on.
 
 - Discovery never runs below high effort.
 - Checking runs on a different model from discovery's, so they don't share blind spots. A severity
