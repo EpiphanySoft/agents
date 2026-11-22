@@ -1,6 +1,6 @@
 ---
 name: pr-respond
-description: Answer the open comments on one pull request as its author, by fixing, replying and pushing. Use when the owner says "respond on PR #74", "/pr-respond 74", or asks to answer a review's comments (a pr-review pass's or a person's). Covers whose comments are answered, sorting each into a clear fix, a choice for the owner, a question or already done, the fix rules (reproduce first, a commit per fix, when to push), the replies, the end-of-round comment, and posting through the review skill's script. The reviewer's side is the pr-review skill.
+description: "Answer the open comments on one pull request as its author, by fixing, replying and pushing. Use when the owner says \"respond on PR #74\", \"/pr-respond 74\", or asks to answer a review's comments (a pr-review pass's or a person's). Covers whose comments are answered, sorting each into a clear fix, a choice for the owner, a question or already done, the fix rules (reproduce first, a commit per fix, when to push), the replies, the end-of-round comment, and posting through the review skill's script. The reviewer's side is the pr-review skill."
 ---
 
 # Responding on a pull request

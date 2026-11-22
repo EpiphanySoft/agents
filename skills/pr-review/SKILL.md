@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review one open pull request against the project's requirements, and post what it finds on the pull request. Use when the owner asks for a pass on a pull request ("review PR #74", "again" after a push, "run a premium pr-review on #74", "/pr-review plus 74"). Covers the pass's input, the work pad, the level, classing each finding as regression or latent, posting one COMMENT review with line comments and additional findings, plausible and exploitable claims, and passes after a push. The built-in /code-review is the quick correctness check of a diff; this asks the requirement questions, with the review skill's claims, checking and confirmations.
+description: "Review one open pull request against the project's requirements, and post what it finds on the pull request. Use when the owner asks for a pass on a pull request (\"review PR #74\", \"again\" after a push, \"run a premium pr-review on #74\", \"/pr-review plus 74\"). Covers the pass's input, the work pad, the level, classing each finding as regression or latent, posting one COMMENT review with line comments and additional findings, plausible and exploitable claims, and passes after a push. The built-in /code-review is the quick correctness check of a diff; this asks the requirement questions, with the review skill's claims, checking and confirmations."
 ---
 
 # Pull request review
