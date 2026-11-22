@@ -404,7 +404,9 @@ count.
     posted, so it never posts a copy.
 
 A bug found by mutation testing (the `mutation` skill) is filed as a finding in the same shape, with
-its area's label.
+its area's label. The script's `pr` commands post a pull request review's passes (the `pr-review`
+skill), and `respond` the author's answers on it (the `pr-respond` skill), with the same text check
+and markers.
 
 ## After the review
 
