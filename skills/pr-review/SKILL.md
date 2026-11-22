@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review one open pull request against the project's requirements, and post what it finds on the pull request. Use when the owner asks for a pass on a pull request ("review PR #74", "again" after a push, "run a premium pr-review on #74", "/pr-review plus 74"). Covers the pass's input, the work pad, the level, posting one COMMENT review with line comments, findings outside the diff, exploitable claims, and passes after a push. The built-in /code-review is the quick correctness check of a diff; this asks the requirement questions, with the review skill's claims, checking and confirmations.
+description: Review one open pull request against the project's requirements, and post what it finds on the pull request. Use when the owner asks for a pass on a pull request ("review PR #74", "again" after a push, "run a premium pr-review on #74", "/pr-review plus 74"). Covers the pass's input, the work pad, the level, posting one COMMENT review with line comments, findings outside the diff, plausible and exploitable claims, and passes after a push. The built-in /code-review is the quick correctness check of a diff; this asks the requirement questions, with the review skill's claims, checking and confirmations.
 ---
 
 # Pull request review
@@ -68,8 +68,7 @@ and comment and the markers, and the owner reads it on the pull request.
     its claim, evidence and remedy.
 - **The review's body** is the summary: the verdict, counts by severity, what was read, *Outside this
     PR*, and how it ran (level, models, efforts, tokens).
-- A claim the checker rated plausible is a question (*The owner's questions*): posted as a finding
-    with `question`, which says it is a choice for the owner.
+- **Only confirmed and corrected findings** are posted and counted (*Plausible claims*).
 
 The pass writes `pass-<k>.json`, then runs `file_review.py pr post <n>` from the repository's root.
 After a stop, it runs it again: the markers keep anything from being posted twice.
@@ -80,6 +79,14 @@ A finding the pull request didn't cause (old code it reads, a document it doesn'
 review's body under *Outside this PR*: title, file and line, severity. It is filed as an issue, in the
 review skill's finding shape, only when the owner says so, all or some:
 `file_review.py pr file <n> <id> ...`, or `--all` for the latest pass's list.
+
+## Plausible claims
+
+A claim the checker rated plausible is a question for the owner, not a finding: it is never posted,
+counted or put on the outside list. It stays in the work pad with `question` set, and the agent's
+report lists each one as a walk-thru item: the question, the options and the recommendation (the
+shared `CLAUDE.md` rule). The owner's answer either makes it a finding of the next pass ("post it"),
+under that pass's own id and with the decision, or drops it.
 
 ## Exploitable claims
 
@@ -112,5 +119,5 @@ script reads markers and threads the same way.
 ## The agent's report
 
 Short, to the owner: the review's link, the verdict and counts; the exploitable claims with their
-evidence; the outside list, for the owner to say which to file; the questions, as a walk thru (the
-shared `CLAUDE.md` rule); the comments by others left unread; and any failure, as it happened.
+evidence; the outside list, for the owner to say which to file; the plausible claims and any other
+questions, as a walk thru (the shared `CLAUDE.md` rule); the comments by others left unread; and any failure, as it happened.

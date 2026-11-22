@@ -194,6 +194,11 @@ pass 2's third.
 `exploitable.json`, is in no `gh` call of `pr post` or `pr file --all`: no comment, no count, no line
 of the outside list, no reply. Each run names the ids it kept back.
 
+**Questions.** A finding with `question: true` is a plausible claim, a question for the owner: like
+an exploitable one it is in no `gh` call of `pr post`, and `pr file` refuses it, `--all` included.
+Each run names the ids it kept back. Once the owner says "post it", the next pass carries it as one
+of its own findings, under a new id, with `decision`.
+
 - **`pr post <n>`** posts the latest pass. It refuses records that don't hold together (a gap in the
     passes, a `base` that isn't the last `head`, an id used twice, a reply to anything but an earlier
     pass's finding on the diff, a `fixed` reply without its `sha`). It text-checks the review's body,
@@ -276,7 +281,8 @@ recorded, bad configs and records, a failing text check, the kind labels and exp
 question filed, kept private, not filed and failing its text check, and that nothing is closed or
 edited. For `pr`: a first pass, a run again after a partial post and after a review made but not
 recorded, a second pass replying on threads, filing the chosen outside findings, a failing text
-check, markers planted by others, refused records, that exploitable claims reach no `gh` call, and
+check, markers planted by others, refused records, that questions for the owner and exploitable
+claims reach no `gh` call, and
 that no forbidden call is made. For `respond`: a round's replies and its comment, a later round with
 the owner's decision, a run again after a partial post and after a reply made but not recorded, a
 commit not pushed, comments by others left unread and counted, a failing text check, refused records,

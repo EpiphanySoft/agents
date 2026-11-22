@@ -17,7 +17,8 @@ the marker each body ends with lets it find, rather than repeat, an item it made
 when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull request review's
 latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on earlier findings'
 threads; `pr file` files the outside findings the owner chose. Both keep <pad>/pr-state.json, find what
-an earlier run posted by its marker, and leave out every claim flagged exploitable. `respond` posts the
+an earlier run posted by its marker, and leave out every claim flagged exploitable and every
+question for the owner. `respond` posts the
 author's round, <pad>/round-<k>.json: its replies on the reviewers' threads and one comment on the pull
 request, refusing any commit not on the pull request's branch, keeping <pad>/respond-state.json. The
 `pr` and `respond` commands read only the comments of the project's owners, members and collaborators. It never closes or
@@ -833,6 +834,11 @@ def flagged(pad, ids):
     return {i for i, (_, _, f) in ids.items() if f.get("exploitable")} | load_exploitable(pad)
 
 
+def asked(ids):
+    """Every id that is a question for the owner (a plausible claim): never posted or filed."""
+    return {i for i, (_, _, f) in ids.items() if f.get("question")}
+
+
 def counts(findings):
     return ", ".join(f"{s} {sum(f['severity'] == s for f in findings)}" for s in ("High", "Med", "Low"))
 
@@ -939,19 +945,24 @@ def post_items(pad, todo, found, state_file=PR_STATE_FILE):
         write_state(pad, state, state_file)
 
 
-def report_kept(kept):
+def report_kept(kept, questions=()):
     if kept:
         print("kept in the work pad, flagged exploitable: " + ", ".join(kept))
+    if questions:
+        print("kept in the work pad, questions for the owner: " + ", ".join(questions))
 
 
 def cmd_pr_post(config, pad, n):
     passes, ids = load_passes(pad, n)
     p = passes[max(passes)]
-    k, private = p["pass"], flagged(pad, ids)
-    findings = [f for f in p["findings"] if f["id"] not in private]
-    outside = [f for f in p["outside"] if f["id"] not in private]
-    replies = [r for r in p["replies"] if r["id"] not in private]
-    kept = [x["id"] for x in p["findings"] + p["outside"] + p["replies"] if x["id"] in private]
+    k, private, questions = p["pass"], flagged(pad, ids), asked(ids)
+    local = private | questions
+    findings = [f for f in p["findings"] if f["id"] not in local]
+    outside = [f for f in p["outside"] if f["id"] not in local]
+    replies = [r for r in p["replies"] if r["id"] not in local]
+    every = p["findings"] + p["outside"] + p["replies"]
+    kept = [x["id"] for x in every if x["id"] in private]
+    held = [x["id"] for x in every if x["id"] in questions and x["id"] not in private]
     comments = []
     for f in findings:
         c = {"path": f["at"]["file"], "line": f["at"]["line"],
@@ -987,17 +998,19 @@ def cmd_pr_post(config, pad, n):
         post_items(pad, todo, found)
     finally:
         body_path.unlink(missing_ok=True)
-    report_kept(kept)
+    report_kept(kept, held)
     return 0
 
 
 def cmd_pr_file(config, pad, n, chosen, every):
     passes, ids = load_passes(pad, n)
-    private = flagged(pad, ids)
+    private, questions = flagged(pad, ids), asked(ids)
     latest = passes[max(passes)]
     if every:
-        chosen = [f["id"] for f in latest["outside"] if f["id"] not in private]
-        report_kept([f["id"] for f in latest["outside"] if f["id"] in private])
+        chosen = [f["id"] for f in latest["outside"] if f["id"] not in private | questions]
+        report_kept([f["id"] for f in latest["outside"] if f["id"] in private],
+                    [f["id"] for f in latest["outside"]
+                     if f["id"] in questions and f["id"] not in private])
     items, areas = [], None
     for fid in dict.fromkeys(chosen):
         if fid not in ids:
@@ -1005,6 +1018,9 @@ def cmd_pr_file(config, pad, n, chosen, every):
         k, part, f = ids[fid]
         found_by = f"**Found by:** the review of #{n}, pass {k}, " + \
             ("outside its diff" if part == "outside" else "on its diff") + f"; work-pad id {fid}"
+        if fid in questions:
+            raise Refused(f"{fid}: a question for the owner, never filed; once the owner decides, "
+                          "it is a finding of the next pass")
         if fid in private:
             key = f"{fid} advisory"
             body = finding_body(config, f, review=found_by, end=pr_marker(n, key))

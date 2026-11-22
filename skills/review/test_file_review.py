@@ -563,8 +563,10 @@ def first_pass():
             pr_finding("P1-2", "A forged token is accepted.", 30, kind="security",
                        severity="High", exploitable=True,
                        what_goes_wrong="A forged token opens the admin page."),
-            pr_finding("P1-3", "The retry has no test.", 40, kind="test gap", severity="Low",
-                       question=True),
+            pr_finding("P1-3", "The retry has no test.", 40, kind="test gap", severity="Low"),
+            # A plausible claim: a question for the owner, kept in the work pad.
+            pr_finding("P1-7", "A retry may count as a second request.", 44, kind="differs",
+                       question=True, what_goes_wrong="Whether a retry is billed twice."),
         ],
         "outside": [
             finding("P1-4", "Two documents give different timeouts.", kind="differs",
@@ -572,6 +574,8 @@ def first_pass():
             finding("P1-5", "An old helper is never called.", kind="untraced", severity="Low"),
             finding("P1-6", "A replayed request is accepted.", kind="security", severity="High",
                     exploitable=True, what_goes_wrong="A replayed request moves the money twice."),
+            finding("P1-8", "The guide may mean days, not hours.", kind="differs", area="docs",
+                    code=[], question=True),
         ],
         "replies": [],
     }
@@ -588,6 +592,7 @@ def second_pass():
              "evidence": "`src/core.py:12` now reads `if n <= limit:`."},
             {"id": "P1-3", "status": "holds", "evidence": "No test reaches the retry yet."},
             {"id": "P1-2", "status": "holds", "evidence": "The forged token still opens it."},
+            {"id": "P1-7", "status": "holds", "evidence": "A retry is still billed twice."},
         ],
     }
 
@@ -654,9 +659,10 @@ class PrReviewTest(unittest.TestCase):
             "severity Med\n\n**A value on the limit is dropped.**\n"))
         for part in ("**Kind:** bug", "if n < limit:", "**What goes wrong**", "**Remedy**"):
             self.assertIn(part, comments[0]["body"])
-        self.assertIn("**A choice for the owner:**", comments[1]["body"])
+        self.assertNotIn("A choice for the owner", body + json.dumps(comments))
         self.assertTrue(comments[0]["body"].endswith("<!-- pr-review 74 P1-1 -->\n"))
         self.assertIn("kept in the work pad, flagged exploitable: P1-2, P1-6", done.stdout)
+        self.assertIn("kept in the work pad, questions for the owner: P1-7, P1-8", done.stdout)
         self.assertEqual(set(self.pr_state()), {"pass 1"})
         # Run again: nothing more is posted.
         self.assertEqual(self.pr("post", "74").returncode, 0)
@@ -763,6 +769,7 @@ class PrReviewTest(unittest.TestCase):
                           "An old helper is never called."])
         self.assertEqual(self.store()["advisories"], [])
         self.assertIn("kept in the work pad, flagged exploitable: P1-6", done.stdout)
+        self.assertIn("kept in the work pad, questions for the owner: P1-8", done.stdout)
 
     def test_an_exploitable_finding_named_by_the_owner_is_a_private_advisory(self):
         self.post_first()
@@ -776,7 +783,9 @@ class PrReviewTest(unittest.TestCase):
     def test_file_refuses_a_finding_on_the_diff_or_an_unknown_one(self):
         self.post_first()
         for fid, needle in (("P1-1", "posted on its line, not filed"),
-                            ("P9-9", "no such finding")):
+                            ("P9-9", "no such finding"),
+                            ("P1-8", "a question for the owner, never filed"),
+                            ("P1-7", "a question for the owner, never filed")):
             done = self.pr("file", "74", fid)
             self.assertEqual(done.returncode, 2)
             self.assertIn(needle, done.stderr)
@@ -818,6 +827,21 @@ class PrReviewTest(unittest.TestCase):
         self.write_pass(record)
         self.assertEqual(self.pr("post", "74").returncode, 1)
         self.assertEqual(len(self.posts()), 1)
+
+    def test_questions_for_the_owner_never_reach_gh(self):
+        self.post_first()
+        self.assertEqual(self.pr("file", "74", "--all").returncode, 0)
+        self.write_pass(second_pass())
+        done = self.pr("post", "74")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("kept in the work pad, questions for the owner: P1-7", done.stdout)
+        sent = self.everything_sent()
+        for text in ("P1-7", "P1-8", "second request", "billed twice", "days, not hours"):
+            self.assertNotIn(text, sent)
+        # The counts hold only the findings posted: P1-1 (Med) and P1-3 (Low).
+        self.assertIn("High 0, Med 1, Low 1", self.store()["reviews"][0]["body"])
+        replies = [c for c in self.store()["comments"] if c["in_reply_to_id"]]
+        self.assertEqual(len(replies), 2)
 
     def test_exploitable_claims_never_reach_gh(self):
         (self.root / "review" / "pr-74").mkdir(parents=True)
