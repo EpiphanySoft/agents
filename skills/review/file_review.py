@@ -330,6 +330,8 @@ def build_plan(config, pad):
         labels = list(config["labels"])
         if f["area"] is not None:
             labels.append(config["area_prefix"] + f["area"])
+        if "kind_prefix" in config:
+            labels.append(config["kind_prefix"] + f["kind"])
         if f.get("question"):
             labels.append(config["question_label"])
         items.append({"id": f["id"], "type": "issue", "title": f["title"], "body": body,

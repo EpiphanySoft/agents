@@ -151,6 +151,16 @@ class FileReviewTest(unittest.TestCase):
         self.assertIn("Text check: passed", text)
         self.assertFalse((self.pad / "filing-state.json").exists())
 
+    def test_kind_labels_only_with_a_kind_prefix(self):
+        self.run_script("dry-run")
+        self.assertNotIn("kind:", (self.pad / "filing-dry-run.md").read_text())
+        self.config["kind_prefix"] = "kind:"
+        self.write_inputs()
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        text = (self.pad / "filing-dry-run.md").read_text()
+        self.assertIn("- labels: review, area:core, kind:bug\n", text)
+        self.assertIn("- labels: review, area:docs, kind:differs, question\n", text)
+
     def test_body_starts_with_severity_and_holds_the_finding(self):
         self.run_script("dry-run")
         text = (self.pad / "filing-dry-run.md").read_text()

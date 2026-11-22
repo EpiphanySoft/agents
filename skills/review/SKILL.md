@@ -369,6 +369,8 @@ Filing places nothing into plans. Each finding is its own issue:
     agreed resolution if it has one. Nothing it needs is left in the work pad;
 - **one area label** from the project's areas: that of the first code it names, else its section's.
     A finding no code area owns gets the project's documents or tooling area if it has one, else none;
+- **a kind label**, `<kind_prefix><kind>`, when the project's config sets `kind_prefix`; without it,
+    the kind is in the body only;
 - **the question label** when it is a choice for the owner.
 
 A **summary issue**, "<prefix><n>: summary", lists every finding by link (a list, not sub-issues, so

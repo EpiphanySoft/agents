@@ -47,6 +47,11 @@
       "uniqueItems": true,
       "description": "Optional. Labels added to every finding's issue."
     },
+    "kind_prefix": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. When set, each finding also gets the label <kind_prefix><kind>, such as \"kind:bug\". Without it, the kind is in the body only."
+    },
     "question_label": {
       "type": "string",
       "minLength": 1,

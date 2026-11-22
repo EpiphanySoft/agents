@@ -25,6 +25,7 @@ that doesn't match, naming the field (`config.name.number: must be integer`).
 | `area_prefix` | required | the start of every area label, such as `area:` |
 | `areas_command` | optional | a command printing the areas, one name a line, without the prefix; without it, the areas are the repository's labels that start with `area_prefix` |
 | `labels` | optional | labels added to every finding's issue |
+| `kind_prefix` | optional | when set, each finding also gets the label `<kind_prefix><kind>`, such as `kind:bug`; without it, the kind is in the body only |
 | `question_label` | optional | default `question`: a finding that is a choice for the owner, and a question issue |
 | `text_check` | optional | a command with `{file}`, run on every title and body before posting; a non-zero exit stops the post |
 | `advisory_package` | optional | `{"ecosystem", "name"}` an advisory names; default `other` and the repository's name |
