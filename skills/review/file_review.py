@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""File a code review's findings: one issue per finding, a draft security advisory for each finding
-marked exploitable, and a summary issue listing them by link; and post a pull request review's passes.
-See filing.md beside this script.
+"""File a code review's findings: one issue per finding, each a sub-issue of its area's step in the
+review's sweep, a draft security advisory for each finding marked exploitable, and the summary as a
+comment on the review's own step; and post a pull request review's passes. See filing.md beside this
+script.
 
     file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
     file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
@@ -10,22 +11,27 @@ See filing.md beside this script.
     file_review.py pr file <n> (<id> ... | --all) [--config docs/review.json] [--pad review/pr-<n>]
     file_review.py respond <n> [--config docs/review.json] [--pad review/pr-<n>]
 
-`dry-run` writes the whole plan to <pad>/filing-dry-run.md and posts nothing. `post` posts exactly
-that plan through the gh CLI, keeping <pad>/filing-state.json so a run that stopped can be run again;
-the marker each body ends with lets it find, rather than repeat, an item it made but didn't record.
-`question` files one question for the owner as a walk-thru issue, or keeps it in <pad>/questions.md
-when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull request review's
-latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on earlier findings'
-threads; `pr file` files the additional findings the owner chose. Both keep <pad>/pr-state.json, find what
-an earlier run posted by its marker, and leave out every claim flagged exploitable and every
-question for the owner. `respond` posts the
-author's round, <pad>/round-<k>.json: its replies on the reviewers' threads and one comment on the pull
-request, refusing any commit not on the pull request's branch, keeping <pad>/respond-state.json. The
-`pr` and `respond` commands read only the comments of the project's owners, members and collaborators. It never closes or
-edits an issue, and never resolves, approves or requests changes. Python 3 standard library only.
+`dry-run` writes the whole plan to <pad>/filing-dry-run.md, each finding's parent and numbered title
+included, and posts nothing; it reads the sweep label and the review's own step from <pad>/sweep.json.
+`post` posts exactly that plan through the gh CLI: each finding is filed, then attached under its
+parent, both kept in <pad>/filing-state.json so a run that stopped does only what is missing; the
+marker each body ends with lets it find, rather than repeat, an item it made but didn't record.
+`question` files one question for the owner as a walk-thru issue under its area's step, or keeps it in
+<pad>/questions.md when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull
+request review's latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on
+earlier findings' threads; `pr file` files the additional findings the owner chose, in the sweep of the
+pull request's sweep label if it has one. Both keep <pad>/pr-state.json, find what an earlier run
+posted by its marker, and leave out every claim flagged exploitable and every question for the owner.
+`respond` posts the author's round, <pad>/round-<k>.json: its replies on the reviewers' threads and one
+comment on the pull request, refusing any commit not on the pull request's branch, keeping
+<pad>/respond-state.json. The `pr` and `respond` commands, and the summary's lookup on its step, read
+only the comments of the project's owners, members and collaborators. It never closes or edits an
+issue, never makes a parent, and never resolves, approves or requests changes. Python 3 standard
+library only.
 
-Exit status: 0 done; 1 a text check or gh call failed (what was posted is kept; a question is kept in
-questions.md); 2 refused (a bad config or input, or a plan that doesn't match the dry run).
+Exit status: 0 done; 1 a text check, a parent search or a gh call failed (what was posted is kept; a
+question is kept in questions.md); 2 refused (a bad config or input, or a plan that doesn't match the
+dry run).
 """
 
 import argparse
@@ -46,6 +52,7 @@ STATE_FILE = "filing-state.json"
 FINDINGS_FILE = "findings.jsonl"
 SUMMARY_FILE = "summary.json"
 EXPLOITABLE_FILE = "exploitable.json"
+SWEEP_FILE = "sweep.json"
 QUESTIONS_FILE = "questions.md"
 CHECK_FILE = ".text-check.md"
 
@@ -232,6 +239,149 @@ def load_summary(pad):
     return summary
 
 
+SWEEP_PREFIX = "sweep:"
+
+SWEEP_SCHEMA = {
+    "type": "object",
+    "required": ["label"],
+    "additionalProperties": False,
+    "properties": {
+        "label": {"type": "string", "pattern": r"^sweep:\S+$"},
+        "step": {"type": ["integer", "null"], "minimum": 1},
+    },
+}
+
+
+def load_sweep(pad):
+    """The review's sweep label and its own step, from sweep.json, which Phase 0 writes."""
+    path = pad / SWEEP_FILE
+    if not path.exists():
+        raise Refused(f"{path}: missing; every review is a sweep: Phase 0 writes its sweep label "
+                      f"(and the review's own step) there, as {{\"label\": \"sweep:H1\", "
+                      f"\"step\": 41}}")
+    sweep = load_json(path, "sweep")
+    check_schema(sweep, SWEEP_SCHEMA, SWEEP_FILE)
+    sweep.setdefault("step", None)
+    return sweep
+
+
+# ---- the sweep: parents and numbered titles ----
+
+OPEN_ISSUES_QUERY = """query($owner: String!, $name: String!, $label: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $endCursor, states: OPEN, labels: [$label]) {
+      nodes { number title body parent { number } labels(first: 100) { nodes { name } } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}"""
+
+STEP_ID = re.compile(r"^([A-Za-z]+[0-9]+(?:\.[0-9]+)+)(?=\s|$)")
+
+
+def is_finding(body):
+    """Whether an issue's body carries a finding's marker: a review's, or a pull request review's
+    filed issue. A finding is never a parent."""
+    return bool(MARKER.search(body)) or \
+        any(m.group(2).endswith(" issue") for m in PR_MARKER.finditer(body))
+
+
+def step_id(title):
+    """The leading id of a step's title, "H1.6" of "H1.6 Trust and signatures", or None."""
+    m = STEP_ID.match(title)
+    return m.group(1) if m else None
+
+
+class Sweep:
+    """A sweep's open issues, read once a run: the issues that may be a parent are those with the
+    sweep label, no parent of their own and no finding's marker. The script never makes one."""
+
+    def __init__(self, config, label, step=None):
+        self.config, self.label, self.step = config, label, None
+        owner, name = config["repo"].split("/")
+        out = run(["gh", "api", "graphql", "--paginate", "-f", f"query={OPEN_ISSUES_QUERY}",
+                   "-f", f"owner={owner}", "-f", f"name={name}", "-f", f"label={label}"],
+                  f"gh api graphql (the open issues labelled {label})")
+        self.candidates = []
+        for page in json_values(out):
+            for node in page["data"]["repository"]["issues"]["nodes"]:
+                if node.get("parent") or is_finding(node.get("body") or ""):
+                    continue
+                self.candidates.append({"number": node["number"], "title": node["title"],
+                                        "labels": [x["name"] for x in node["labels"]["nodes"]]})
+        self._subs = {}
+        if step is not None:
+            self.step = next((i for i in self.candidates if i["number"] == step), None)
+            if self.step is None:
+                raise Refused(f"{SWEEP_FILE}.step: #{step} is not an open issue labelled {label} "
+                              "with no parent of its own and no finding's marker")
+
+    def parent(self, area):
+        """(issue, None), (None, None) when there is no parent, or (None, why) when the search
+        fails. A finding no area owns goes under the review's own step, when there is one."""
+        if area is None:
+            return self.step, None
+        label = self.config["area_prefix"] + area
+        matches = [i for i in self.candidates if label in i["labels"]]
+        if len(matches) == 1:
+            return matches[0], None
+        if not matches:
+            return None, (f"area {area}: no open issue labelled {label} and {self.label} with no "
+                          "parent of its own; the sweep's planning makes its steps")
+        return None, (f"area {area}: {len(matches)} open issues could be its parent ("
+                      + ", ".join(f"#{i['number']}" for i in matches)
+                      + "); an area has at most one open step")
+
+    def sub_issues(self, number):
+        """The parent's sub-issues in every state, read once a run."""
+        if number not in self._subs:
+            out = run(["gh", "api", "--paginate",
+                       f"repos/{self.config['repo']}/issues/{number}/sub_issues?per_page=100"],
+                      f"gh api issues/{number}/sub_issues (list)")
+            self._subs[number] = [{"number": i["number"], "title": i["title"],
+                                   "body": i.get("body") or ""}
+                                  for page in json_values(out) for i in page]
+        return self._subs[number]
+
+    def titles(self, entries, own):
+        """entries: (key, parent or None, sentence), in filing order. The title is "<step id>-<m>
+        <sentence>", m numbering on from the highest among the parent's sub-issues, those whose
+        body own(body) says are these entries' (filed by an earlier run) left out; a parent title
+        with no leading id, or no parent, gives the plain sentence. {key: title}."""
+        next_m, titles = {}, {}
+        for key, parent, sentence in entries:
+            sid = step_id(parent["title"]) if parent else None
+            if sid is None:
+                titles[key] = sentence
+                continue
+            n = parent["number"]
+            if n not in next_m:
+                pattern = re.compile(rf"^{re.escape(sid)}-([0-9]+)(?=\s|$)")
+                found = [int(m.group(1)) for s in self.sub_issues(n) if not own(s["body"])
+                         for m in [pattern.match(s["title"])] if m]
+                next_m[n] = max(found, default=0) + 1
+            titles[key] = f"{sid}-{next_m[n]} {sentence}"
+            next_m[n] += 1
+        return titles
+
+
+def attach(config, sweep, parent, record, body_path):
+    """Make the issue in record a sub-issue of parent, unless it is one already."""
+    n, repo = record["number"], config["repo"]
+    if any(s["number"] == n for s in sweep.sub_issues(parent)):
+        print(f"#{n}: a sub-issue of #{parent} already; recorded")
+        return parent
+    out = run(["gh", "api", f"repos/{repo}/issues/{n}", "--jq", ".id"], f"gh api issues/{n}")
+    try:
+        child = int(out.strip())
+    except ValueError:
+        raise Failed(f"gh api issues/{n}: no id in its answer:\n{out}")
+    gh_post(f"repos/{repo}/issues/{parent}/sub_issues", {"sub_issue_id": child}, body_path,
+            f"gh api issues/{parent}/sub_issues (#{n})")
+    print(f"#{n}: a sub-issue of #{parent}")
+    return parent
+
+
 # ---- commands ----
 
 def run(argv, what, stdin=None):
@@ -327,11 +477,12 @@ def link_placeholder(finding_id):
     return f"#<{finding_id}>"
 
 
-def summary_body(config, summary, items, links):
+def summary_body(config, summary, items, links, sweep):
     """links maps a finding's id to its issue link; ids not in it get a placeholder."""
     n = config["name"]["number"]
     branch = f"code-review-{n:04d}"
     lines = [
+        f"**Sweep:** `{sweep['label']}`",
         f"**Commit read:** {summary['commit']}",
         "**Delta from:** " + (summary["base_commit"] or
                               "none: the project's first review, read in full"),
@@ -353,7 +504,7 @@ def summary_body(config, summary, items, links):
         f = i["finding"]
         area = f["area"] or "none"
         link = links.get(f["id"], link_placeholder(f["id"]))
-        lines.append(f"- {link} severity {f['severity']}, {f['kind']}, area {area}: {f['title']}")
+        lines.append(f"- {link} severity {f['severity']}, {f['kind']}, area {area}: {i['title']}")
     if not issues:
         lines.append("- none filed as issues")
     if advisories:
@@ -367,8 +518,10 @@ def summary_body(config, summary, items, links):
     return "\n".join(lines) + "\n"
 
 
-def issue_labels(config, f):
+def issue_labels(config, f, sweep_label=None):
     labels = list(config["labels"])
+    if sweep_label:
+        labels.append(sweep_label)
     if f["area"] is not None:
         labels.append(config["area_prefix"] + f["area"])
     if "kind_prefix" in config:
@@ -384,12 +537,19 @@ def check_area(f, areas, where):
                       f"project's areas ({', '.join(sorted(areas)) or 'none listed'})")
 
 
+def own_markers(keys, ids):
+    """own(body): whether a body carries the marker of one of ids, by keys(body)."""
+    return lambda body: any(k in ids for k in keys(body))
+
+
 def build_plan(config, pad):
     findings = load_findings(pad)
     summary = load_summary(pad)
+    sweep_record = load_sweep(pad)
     areas = list_areas(config)
     flagged = load_exploitable(pad)
-    items = []
+    sweep = Sweep(config, sweep_record["label"], sweep_record["step"])
+    items, entries, failures = [], [], []
     for f in findings:
         check_area(f, areas, FINDINGS_FILE)
         body = finding_body(config, f)
@@ -398,25 +558,50 @@ def build_plan(config, pad):
                 "advisory_set": "advisory" in f and f["advisory"] != exploitable,
                 "unflagged": f["id"] in flagged and not exploitable}
         if f.get("advisory", exploitable):
+            # An advisory can't be a sub-issue: a plain title, no parent, not numbered.
             items.append({"id": f["id"], "type": "advisory", "title": f["title"], "body": body,
                           "labels": [], "severity": SEVERITY_FOR_ADVISORY[f["severity"]],
-                          "mark": mark, "finding": f})
+                          "parent": None, "mark": mark, "finding": f})
             continue
+        parent, why = sweep.parent(f["area"])
+        if why:
+            failures.append(f"{f['id']}: {why}")
+        entries.append((f["id"], parent, f["title"]))
         items.append({"id": f["id"], "type": "issue", "title": f["title"], "body": body,
-                      "labels": issue_labels(config, f), "mark": mark, "finding": f})
+                      "labels": issue_labels(config, f, sweep_record["label"]),
+                      "parent": parent["number"] if parent else None,
+                      "parent_title": parent["title"] if parent else None,
+                      "mark": mark, "finding": f})
+    ids = {i["id"] for i in items}
+    titles = sweep.titles(entries, own_markers(review_keys(config), ids))
+    for item in items:
+        item["title"] = titles.get(item["id"], item["title"])
+    step = sweep_record["step"]
     return {
         "repo": config["repo"],
+        "sweep": sweep_record,
         "items": items,
+        "failures": failures,
         "summary": {"title": f"{review_name(config)}: summary",
-                    "body": summary_body(config, summary, items, {}),
-                    "data": summary},
+                    "body": summary_body(config, summary, items, {}, sweep_record),
+                    "on": step, "data": summary},
+        "records": {"findings": findings, "summary": summary, "sweep": sweep_record},
+        "sweep_issues": sweep,
     }
 
 
 def plan_hash(plan):
     keep = {"repo": plan["repo"],
             "items": [{k: v for k, v in i.items() if k != "finding"} for i in plan["items"]],
-            "summary": {"title": plan["summary"]["title"], "body": plan["summary"]["body"]}}
+            "summary": {"title": plan["summary"]["title"], "body": plan["summary"]["body"],
+                        "on": plan["summary"]["on"]}}
+    return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()
+
+
+def records_hash(plan):
+    """The records alone: what the plan is built from, without what the repository gives it (the
+    parents and the numbers)."""
+    keep = {"repo": plan["repo"], **plan["records"]}
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()
 
 
@@ -426,16 +611,40 @@ def item_hash(title, body):
 
 # ---- dry-run ----
 
+def parent_line(item):
+    if item["type"] == "advisory":
+        return "- parent: none (an advisory can't be a sub-issue)"
+    if item["type"] == "summary":
+        return "- parent: none"
+    if item["parent"] is None:
+        why = item.get("why")
+        return f"- parent: FAILED: {why}" if why else \
+            "- parent: none (no area, and no step for the review)"
+    return f"- parent: #{item['parent']} {item['parent_title']}"
+
+
 def write_dry_run(config, pad, plan, failures):
+    sweep, step = plan["sweep"], plan["summary"]["on"]
     out = [f"# {review_name(config)} filing: dry run", "",
-           f"plan sha256: {plan_hash(plan)}", "",
+           f"plan sha256: {plan_hash(plan)}",
+           f"records sha256: {records_hash(plan)}", "",
            f"Repository: {plan['repo']}. Nothing was posted. `post` posts exactly this plan: to "
-           f"change it, change `{FINDINGS_FILE}` or `{SUMMARY_FILE}` and run the dry run again.", ""]
+           f"change it, change `{FINDINGS_FILE}`, `{SUMMARY_FILE}` or `{SWEEP_FILE}` and run the "
+           "dry run again.", "",
+           f"Sweep: `{sweep['label']}`; the review's own step: "
+           + (f"#{step}." if step else "none given."), ""]
     n_adv = sum(1 for i in plan["items"] if i["type"] == "advisory")
     n_issues = len(plan["items"]) - n_adv
     out.append(f"Findings: {n_issues} as public issues, {n_adv} as draft security advisories; "
-               "then the summary issue.")
+               + (f"then the summary, as a comment on #{step}." if step
+                  else "then the summary issue."))
     out.append("")
+    if plan["failures"]:
+        out += ["Parents: FAILED, so `post` refuses this plan:", ""] + \
+            [f"- {why}" for why in plan["failures"]] + [""]
+    else:
+        out += ["Parents: one found for every finding that has an area or goes under the review's "
+                "own step.", ""]
     if "text_check" not in config:
         out.append("Text check: none configured.")
     elif failures:
@@ -447,20 +656,23 @@ def write_dry_run(config, pad, plan, failures):
     if unflagged:
         out += [f"Check the marks: {', '.join(unflagged)} flagged in `{EXPLOITABLE_FILE}` but not "
                 f"`exploitable` in `{FINDINGS_FILE}`.", ""]
-    entries = plan["items"] + [{"id": "summary", "type": "summary", **plan["summary"],
-                                "labels": []}]
+    why = {w.split(":", 1)[0]: w.split(": ", 1)[1] for w in plan["failures"]}
+    entries = [dict(i, why=why.get(i["id"])) for i in plan["items"]] + \
+        [{"id": "summary", "type": "summary", **plan["summary"], "labels": []}]
     for k, item in enumerate(entries, 1):
         if item["type"] == "advisory":
             where = f"draft security advisory, private, severity {item['severity']}"
         elif item["type"] == "issue":
             where = "public issue"
+        elif step:
+            where = f"a comment on #{step}: the summary, posted last, with each finding's link"
         else:
             where = "public issue: the summary, posted last, with each finding's link"
         mark = fence(item["body"])
         out += [f"## {k}. {item['id']}: {where}", "",
                 f"- title: {item['title']}",
                 f"- labels: {', '.join(item['labels']) or 'none'}",
-                "- parent: none"]
+                parent_line(item)]
         if "mark" in item:
             m = item["mark"]
             line = f"- exploitable if public: {'yes' if m['exploitable'] else 'no'}"
@@ -482,10 +694,12 @@ def cmd_dry_run(config, pad):
         if result is not None:
             failures.append(item["id"])
             print(f"text check failed for {item['id']}:\n{result}", file=sys.stderr)
+    for why in plan["failures"]:
+        print(f"no parent for {why}", file=sys.stderr)
     write_dry_run(config, pad, plan, failures)
     print(f"wrote {pad / DRY_RUN_FILE}: {len(plan['items'])} findings and the summary; "
           "nothing posted")
-    return 1 if failures else 0
+    return 1 if failures or plan["failures"] else 0
 
 
 # ---- post ----
@@ -567,31 +781,58 @@ def already_posted(config, keys=None):
     return found
 
 
+def step_comment_posted(config, step, key):
+    """The comment on the step that carries this review's marker for key, read only from comments by
+    an owner, member or collaborator; else None."""
+    out = run(["gh", "api", "--paginate",
+               f"repos/{config['repo']}/issues/{step}/comments?per_page=100"],
+              f"gh api issues/{step}/comments (list)")
+    keys = review_keys(config)
+    for page in json_values(out):
+        for c in page:
+            if c.get("author_association") in TRUSTED and key in keys(c.get("body") or ""):
+                return {"id": c["id"], "url": c.get("html_url")}
+    return None
+
+
 def cmd_post(config, pad):
     plan = build_plan(config, pad)
     dry = pad / DRY_RUN_FILE
     if not dry.exists():
         raise Refused(f"no dry run: run dry-run first and read {dry}")
-    m = re.search(r"^plan sha256: ([0-9a-f]{64})$", dry.read_text(encoding="utf-8"), re.M)
-    if not m or m.group(1) != plan_hash(plan):
+    text = dry.read_text(encoding="utf-8")
+    if plan["failures"]:
+        raise Refused("no parent for " + "; ".join(plan["failures"])
+                      + ": nothing posted; fix the steps or the records and run dry-run again")
+    m = re.search(r"^plan sha256: ([0-9a-f]{64})$", text, re.M)
+    r = re.search(r"^records sha256: ([0-9a-f]{64})$", text, re.M)
+    if not m or not r or r.group(1) != records_hash(plan):
         raise Refused(f"the plan differs from {dry}: run dry-run again and read it before posting")
+    if m.group(1) != plan_hash(plan):
+        raise Refused(f"a parent or a number differs from {dry} (an issue changed in the "
+                      "repository since): run dry-run again and read it before posting")
     state = read_state(pad)
     posted = state.setdefault("posted", {})
     body_path = pad / ".filing-body"
+    sweep = plan["sweep_issues"]
     found = None
 
-    def post_one(item_id, kind, title, body, create):
+    def post_one(item_id, kind, title, body, create, lookup=None):
         nonlocal found
         done = posted.get(item_id)
         if done:
             if done["hash"] != item_hash(title, body):
                 print(f"{item_id}: posted earlier as {done['url']}, and its text has changed "
                       "since; left as it is", file=sys.stderr)
-            return
-        if found is None:
-            found = already_posted(config)
-        if item_id in found:
-            record = dict(found[item_id], found=True)
+            return done
+        if lookup:
+            record = lookup()
+        else:
+            if found is None:
+                found = already_posted(config)
+            record = found.get(item_id)
+        if record:
+            record = dict(record, found=True)
             print(f"{item_id}: found already posted as {record['url']}; recorded, not posted again")
         else:
             result = text_check(config, pad, title, body)
@@ -602,6 +843,7 @@ def cmd_post(config, pad):
         record.update(type=kind, hash=item_hash(title, body))
         posted[item_id] = record
         write_state(pad, state)
+        return record
 
     def issue(title, body, labels):
         def create():
@@ -615,11 +857,22 @@ def cmd_post(config, pad):
                 create = lambda item=item: create_advisory(config, item, body_path)
             else:
                 create = issue(item["title"], item["body"], item["labels"])
-            post_one(item["id"], item["type"], item["title"], item["body"], create)
+            record = post_one(item["id"], item["type"], item["title"], item["body"], create)
+            if item["parent"] and not record.get("attached"):
+                record["attached"] = attach(config, sweep, item["parent"], record, body_path)
+                write_state(pad, state)
         links = {i: f"#{r['number']}" for i, r in posted.items() if r.get("type") == "issue"}
         title = plan["summary"]["title"]
-        body = summary_body(config, plan["summary"]["data"], plan["items"], links)
-        post_one("summary", "summary", title, body, issue(title, body, []))
+        body = summary_body(config, plan["summary"]["data"], plan["items"], links, plan["sweep"])
+        step = plan["summary"]["on"]
+        if step:
+            post_one("summary", "comment", title, body,
+                     lambda: gh_post(f"repos/{plan['repo']}/issues/{step}/comments",
+                                     {"body": body}, body_path,
+                                     f"gh api issues/{step}/comments (the summary)"),
+                     lookup=lambda: step_comment_posted(config, step, "summary"))
+        else:
+            post_one("summary", "summary", title, body, issue(title, body, []))
         return 0
     finally:
         body_path.unlink(missing_ok=True)
@@ -629,7 +882,7 @@ def cmd_post(config, pad):
 
 QUESTION_SCHEMA = {
     "type": "object",
-    "required": ["question", "options", "recommendation"],
+    "required": ["question", "options", "recommendation", "area"],
     "additionalProperties": False,
     "properties": {
         "question": _TEXT,
@@ -645,6 +898,7 @@ QUESTION_SCHEMA = {
         },
         "recommendation": _TEXT,
         "claim": FINDING_SCHEMA["properties"]["id"],
+        "area": FINDING_SCHEMA["properties"]["area"],
     },
 }
 
@@ -675,7 +929,7 @@ def keep_in_questions_md(pad, title, body, reason):
     print(f"kept in {pad / QUESTIONS_FILE}: {reason}")
 
 
-def file_question_issue(config, pad, title, body):
+def file_question_issue(config, pad, title, body, labels):
     """The new issue's record; Failed when the text check or gh refuses it."""
     result = text_check(config, pad, title, body)
     if result is not None:
@@ -683,7 +937,6 @@ def file_question_issue(config, pad, title, body):
     body_path = pad / ".question-body"
     body_path.write_text(body, encoding="utf-8")
     try:
-        labels = list(dict.fromkeys(config["labels"] + [config["question_label"]]))
         return create_issue(config["repo"], title, body_path, labels)
     finally:
         body_path.unlink(missing_ok=True)
@@ -692,24 +945,48 @@ def file_question_issue(config, pad, title, body):
 def cmd_question(config, pad, path):
     q = load_json(path, "question")
     check_schema(q, QUESTION_SCHEMA, "question")
+    sweep_record = load_sweep(pad)
     title, body = question_title(config, q), question_body(config, q)
     private = "claim" in q and q["claim"] in load_exploitable(pad)
+    area = q["area"]
     if private:
         keep_in_questions_md(pad, title, body,
                              f"private: claim {q['claim']} is flagged exploitable if public")
         title = f"{review_name(config)} question: a private question is waiting"
         body = ("A question about one of this review's claims is waiting in its local work pad. "
                 "It is kept private, and walked thru on the owner's return.\n")
+        area = None  # its area would say where to look: the notice goes under the review's step
+    why_kept = (lambda e: f"the notice for the private question above could not be filed: {e}") \
+        if private else (lambda e: f"it could not be filed: {e}")
+    labels = list(config["labels"]) + [config["question_label"], sweep_record["label"]]
     try:
-        record = file_question_issue(config, pad, title, body)
-    except Failed as e:
-        if private:
-            keep_in_questions_md(pad, title, body, f"the notice for the private question above "
-                                                   f"could not be filed: {e}")
-        else:
-            keep_in_questions_md(pad, title, body, f"it could not be filed: {e}")
+        if q["area"] is not None:
+            areas = list_areas(config)
+            if q["area"] not in areas:
+                raise Refused(f"question.area: {q['area']!r} is not one of the project's areas "
+                              f"({', '.join(sorted(areas)) or 'none listed'})")
+        if area is not None:
+            labels.append(config["area_prefix"] + area)
+        sweep = Sweep(config, sweep_record["label"], sweep_record["step"])
+        parent, why = sweep.parent(area)
+        if why:
+            raise Failed(f"no parent for the question's {why}")
+        title = sweep.titles([("q", parent, title)], lambda body: False)["q"]
+        record = file_question_issue(config, pad, title, body, list(dict.fromkeys(labels)))
+    except (Failed, Refused) as e:
+        keep_in_questions_md(pad, title, body, why_kept(e))
         return 1
     print(f"filed: {record['url']}")
+    if parent:
+        body_path = pad / ".question-body"
+        try:
+            attach(config, sweep, parent["number"], record, body_path)
+        except Failed as e:
+            keep_in_questions_md(pad, title, body, f"filed as {record['url']}, but not made a "
+                                 f"sub-issue of #{parent['number']}: {e}")
+            return 1
+        finally:
+            body_path.unlink(missing_ok=True)
     return 0
 
 
@@ -947,25 +1224,29 @@ def text_gate(config, pad, items):
 
 
 def post_items(pad, todo, found, state_file=PR_STATE_FILE):
-    """todo: (key, kind, text, create). Skips what the state or a marker shows is posted."""
+    """todo: (key, kind, text, create[, attach]). Skips what the state or a marker shows is posted.
+    attach(record), when given, runs once the item is made and until the state records it."""
     state = read_state(pad, state_file)
     posted = state.setdefault("posted", {})
-    for key, kind, text, create in todo:
-        done = posted.get(key)
-        if done:
-            if done["hash"] != item_hash(kind, text):
-                print(f"{key}: posted earlier as {done['url']}, and its text has changed since; "
+    for key, kind, text, create, *then in todo:
+        record = posted.get(key)
+        if record:
+            if record["hash"] != item_hash(kind, text):
+                print(f"{key}: posted earlier as {record['url']}, and its text has changed since; "
                       "left as it is", file=sys.stderr)
-            continue
-        if key in found:
-            record = dict(found[key], found=True)
-            print(f"{key}: found already posted as {record['url']}; recorded, not posted again")
         else:
-            record = create()
-            print(f"{key}: {record['url']}")
-        record.update(type=kind, hash=item_hash(kind, text))
-        posted[key] = record
-        write_state(pad, state, state_file)
+            if key in found:
+                record = dict(found[key], found=True)
+                print(f"{key}: found already posted as {record['url']}; recorded, not posted again")
+            else:
+                record = create()
+                print(f"{key}: {record['url']}")
+            record.update(type=kind, hash=item_hash(kind, text))
+            posted[key] = record
+            write_state(pad, state, state_file)
+        if then and then[0] and not record.get("attached"):
+            record["attached"] = then[0](record)
+            write_state(pad, state, state_file)
 
 
 def report_kept(kept, questions=()):
@@ -1025,6 +1306,20 @@ def cmd_pr_post(config, pad, n):
     return 0
 
 
+def pr_sweep(config, n):
+    """The sweep label the pull request carries, or None; two are refused."""
+    out = run(["gh", "api", f"repos/{config['repo']}/issues/{n}"], f"gh api issues/{n}")
+    try:
+        labels = [x["name"] for x in json.loads(out)["labels"]]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise Failed(f"gh api issues/{n}: unexpected answer:\n{out}")
+    sweeps = [x for x in labels if x.startswith(SWEEP_PREFIX)]
+    if len(sweeps) > 1:
+        raise Refused(f"#{n} carries {len(sweeps)} sweep labels ({', '.join(sweeps)}): a pull "
+                      "request for a sweep's issues carries that one sweep's label")
+    return sweeps[0] if sweeps else None
+
+
 def cmd_pr_file(config, pad, n, chosen, every):
     passes, ids = load_passes(pad, n)
     private, questions = flagged(pad, ids), asked(ids)
@@ -1058,11 +1353,32 @@ def cmd_pr_file(config, pad, n, chosen, every):
         check_area(f, areas, f"pass-{k}.json")
         key = f"{fid} issue"
         body = finding_body(config, f, review=found_by, end=pr_marker(n, key))
-        items.append((key, "issue", {"id": fid, "title": f["title"], "body": body,
-                                     "labels": issue_labels(config, f)}))
+        items.append((key, "issue", {"id": fid, "title": f["title"], "body": body, "finding": f}))
     if not items:
         print("nothing to file")
         return 0
+    # The sweep only through the pull request: its sweep label, the parent search, the title rule.
+    label = pr_sweep(config, n) if any(kind == "issue" for _, kind, _ in items) else None
+    sweep = Sweep(config, label) if label else None
+    entries, failures = [], []
+    for key, kind, i in items:
+        if kind != "issue":
+            continue
+        i["labels"] = issue_labels(config, i.pop("finding"), label)
+        parent = None
+        if sweep:
+            parent, why = sweep.parent(ids[i["id"]][2]["area"])
+            if why:
+                failures.append(f"{i['id']}: {why}")
+        i["parent"] = parent["number"] if parent else None
+        entries.append((key, parent, i["title"]))
+    if failures:
+        raise Refused("no parent for " + "; ".join(failures) + ": nothing filed")
+    if sweep:
+        keys = {key for key, _, _ in items}
+        titles = sweep.titles(entries, own_markers(pr_keys(n), keys))
+        for key, kind, i in items:
+            i["title"] = titles.get(key, i["title"])
     text_gate(config, pad, [(key, i["title"], i["body"]) for key, _, i in items])
     posted = read_state(pad, PR_STATE_FILE)["posted"]
     found = {} if all(key in posted for key, _, _ in items) else \
@@ -1075,9 +1391,15 @@ def cmd_pr_file(config, pad, n, chosen, every):
         body_path.write_text(item["body"], encoding="utf-8")
         return create_issue(config["repo"], item["title"], body_path, item["labels"])
 
+    def then(item):
+        if not item.get("parent"):
+            return None
+        return lambda record: attach(config, sweep, item["parent"], record, body_path)
+
     try:
         post_items(pad, [(key, kind, f"{i['title']}\n{i['body']}",
-                          lambda kind=kind, i=i: create(kind, i)) for key, kind, i in items], found)
+                          lambda kind=kind, i=i: create(kind, i), then(i))
+                         for key, kind, i in items], found)
     finally:
         body_path.unlink(missing_ok=True)
     return 0
