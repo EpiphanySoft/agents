@@ -8,6 +8,7 @@ See filing.md beside this script.
     file_review.py question <question.json> [--config docs/review.json] [--pad review/<nnnn>]
     file_review.py pr post <n> [--config docs/review.json] [--pad review/pr-<n>]
     file_review.py pr file <n> (<id> ... | --all) [--config docs/review.json] [--pad review/pr-<n>]
+    file_review.py respond <n> [--config docs/review.json] [--pad review/pr-<n>]
 
 `dry-run` writes the whole plan to <pad>/filing-dry-run.md and posts nothing. `post` posts exactly
 that plan through the gh CLI, keeping <pad>/filing-state.json so a run that stopped can be run again;
@@ -16,7 +17,10 @@ the marker each body ends with lets it find, rather than repeat, an item it made
 when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull request review's
 latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on earlier findings'
 threads; `pr file` files the outside findings the owner chose. Both keep <pad>/pr-state.json, find what
-an earlier run posted by its marker, and leave out every claim flagged exploitable. It never closes or
+an earlier run posted by its marker, and leave out every claim flagged exploitable. `respond` posts the
+author's round, <pad>/round-<k>.json: its replies on the reviewers' threads and one comment on the pull
+request, refusing any commit not on the pull request's branch, keeping <pad>/respond-state.json. The
+`pr` and `respond` commands read only the comments of the project's owners, members and collaborators. It never closes or
 edits an issue, and never resolves, approves or requests changes. Python 3 standard library only.
 
 Exit status: 0 done; 1 a text check or gh call failed (what was posted is kept; a question is kept in
@@ -913,9 +917,9 @@ def text_gate(config, pad, items):
         raise Failed(f"text check failed for {', '.join(failures)}; nothing posted")
 
 
-def post_items(pad, todo, found):
+def post_items(pad, todo, found, state_file=PR_STATE_FILE):
     """todo: (key, kind, text, create). Skips what the state or a marker shows is posted."""
-    state = read_state(pad, PR_STATE_FILE)
+    state = read_state(pad, state_file)
     posted = state.setdefault("posted", {})
     for key, kind, text, create in todo:
         done = posted.get(key)
@@ -932,7 +936,7 @@ def post_items(pad, todo, found):
             print(f"{key}: {record['url']}")
         record.update(type=kind, hash=item_hash(kind, text))
         posted[key] = record
-        write_state(pad, state, PR_STATE_FILE)
+        write_state(pad, state, state_file)
 
 
 def report_kept(kept):
@@ -1039,11 +1043,223 @@ def cmd_pr_file(config, pad, n, chosen, every):
     return 0
 
 
+# ---- the author's side: respond ----
+
+ROUND_FILE = re.compile(r"^round-([1-9][0-9]*)\.json$")
+RESPOND_STATE_FILE = "respond-state.json"
+RESPOND_MARKER = re.compile(r"<!-- pr-respond (\d+) ([^<>]+?) -->")
+
+_LINE = {"type": "string", "minLength": 1, "pattern": r"^[^\n]+$"}
+
+ROUND_SCHEMA = {
+    "type": "object",
+    "required": ["pr", "round", "head", "replies", "answers", "changed", "waiting", "unanswered"],
+    "additionalProperties": False,
+    "properties": {
+        "pr": {"type": "integer", "minimum": 1},
+        "round": {"type": "integer", "minimum": 1},
+        "head": {"type": "string", "pattern": r"^[0-9a-f]{40}$"},
+        "replies": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["thread", "outcome"],
+                "additionalProperties": False,
+                "properties": {
+                    "thread": {"type": "integer", "minimum": 1},
+                    "outcome": {"type": "string", "enum": ["fixed", "answer", "done", "waiting"]},
+                    "sha": _SHA, "how": _LINE, "test": _TEXT, "text": _TEXT,
+                    "decision": _TEXT, "owner_asked": {"type": "boolean"},
+                },
+            },
+        },
+        "answers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["to", "id", "text"],
+                "additionalProperties": False,
+                "properties": {"to": {"type": "string", "enum": ["review", "comment"]},
+                               "id": {"type": "integer", "minimum": 1}, "text": _TEXT,
+                               "owner_asked": {"type": "boolean"}},
+            },
+        },
+        "changed": {
+            "type": "array",
+            "items": {"type": "object", "required": ["sha", "what"], "additionalProperties": False,
+                      "properties": {"sha": _SHA, "what": _LINE}},
+        },
+        "waiting": _TEXTS,
+        "unanswered": _TEXTS,
+    },
+}
+
+OUTCOME_NEEDS = {"fixed": ("sha", "how", "test"), "done": ("sha", "text"), "answer": ("text",),
+                 "waiting": ()}
+
+
+def respond_marker(n, key):
+    return f"<!-- pr-respond {n} {key} -->"
+
+
+def load_rounds(pad, n):
+    rounds = {}
+    for path in sorted(pad.iterdir()):
+        m = ROUND_FILE.match(path.name)
+        if not m:
+            continue
+        record = load_json(path, "round")
+        check_schema(record, ROUND_SCHEMA, path.name)
+        if record["round"] != int(m.group(1)):
+            raise Refused(f"{path.name}.round: {record['round']} is not the file's number")
+        if record["pr"] != n:
+            raise Refused(f"{path.name}.pr: {record['pr']}, not {n}")
+        rounds[record["round"]] = record
+    if not rounds:
+        raise Refused(f"work pad {pad}: no round-<k>.json")
+    if sorted(rounds) != list(range(1, len(rounds) + 1)):
+        raise Refused(f"work pad {pad}: rounds {sorted(rounds)} are not 1, 2, ... without a gap")
+    r = rounds[max(rounds)]
+    where = f"round-{r['round']}.json"
+    threads = [x["thread"] for x in r["replies"]]
+    if len(set(threads)) != len(threads):
+        raise Refused(f"{where}: a thread has two replies in one round")
+    for x in r["replies"]:
+        for name in OUTCOME_NEEDS[x["outcome"]]:
+            if name not in x:
+                raise Refused(f"{where} thread {x['thread']}.{name}: a {x['outcome']} reply needs it")
+    targets = [(a["to"], a["id"]) for a in r["answers"]]
+    if len(set(targets)) != len(targets):
+        raise Refused(f"{where}: a comment has two answers in one round")
+    return r
+
+
+def pr_conversation(config, n):
+    """The pull request's review comments, conversation comments and reviews. Those by anyone but an
+    owner, member or collaborator keep only their id, thread and link: their text is never read."""
+    repo, seen, skipped = config["repo"], {}, 0
+    for what, path in (("comments", f"repos/{repo}/pulls/{n}/comments?per_page=100"),
+                       ("conversation", f"repos/{repo}/issues/{n}/comments?per_page=100"),
+                       ("reviews", f"repos/{repo}/pulls/{n}/reviews?per_page=100")):
+        out = run(["gh", "api", "--paginate", path], f"gh api {what} of #{n} (list)")
+        items = {}
+        for page in json_values(out):
+            for item in page:
+                trusted = item.get("author_association") in TRUSTED
+                skipped += not trusted
+                items[item["id"]] = {"id": item["id"], "trusted": trusted,
+                                     "in_reply_to_id": item.get("in_reply_to_id"),
+                                     "url": item.get("html_url"),
+                                     "body": (item.get("body") or "") if trusted else ""}
+        seen[what] = items
+    return seen, skipped
+
+
+def on_branch(repo, sha, head):
+    """Whether sha is head or one of its ancestors on GitHub."""
+    argv = ["gh", "api", f"repos/{repo}/compare/{sha}...{head}", "--jq", ".status"]
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True)
+    except OSError as e:
+        raise Failed(f"gh api compare: cannot run gh: {e.strerror}")
+    if done.returncode != 0:
+        if "404" in done.stdout + done.stderr or "Not Found" in done.stdout + done.stderr:
+            return False
+        raise Failed(f"gh api compare ({sha}) failed (exit {done.returncode}):\n"
+                     f"{done.stdout}{done.stderr}".rstrip())
+    return done.stdout.strip() in ("ahead", "identical")
+
+
+def respond_reply_body(n, k, x):
+    lines = [f"The owner decided: {x['decision']}", ""] if "decision" in x else []
+    o = x["outcome"]
+    if o == "fixed":
+        lines += [f"Fixed in {x['sha']}: {x['how']}", "", f"Proved by {x['test']}."]
+    elif o == "done":
+        lines += [f"Already done in {x['sha']}: {x['text']}"]
+    elif o == "waiting":
+        lines += ["Waiting on the owner's decision."] + (["", x["text"]] if "text" in x else [])
+    else:
+        lines += [x["text"]]
+    lines += ["", respond_marker(n, f"thread {x['thread']} round {k}")]
+    return "\n".join(lines) + "\n"
+
+
+def round_comment_body(n, r, answered):
+    k = r["round"]
+    lines = [f"**pr-respond, round {k}**: the head {r['head']}", "", "## What changed", ""]
+    lines += [f"- {c['sha']}: {c['what']}" for c in r["changed"]] or ["- nothing"]
+    if answered:
+        lines += ["", "## Answers", ""] + [f"- To {url}: {text}" for url, text in answered]
+    lines += ["", "## Waiting on the owner", ""] + ([f"- {t}" for t in r["waiting"]] or ["- nothing"])
+    lines += ["", "## Not answered", ""] + ([f"- {t}" for t in r["unanswered"]] or ["- none"])
+    lines += ["", respond_marker(n, f"round {k}")]
+    return "\n".join(lines) + "\n"
+
+
+def cmd_respond(config, pad, n):
+    r = load_rounds(pad, n)
+    k, repo = r["round"], config["repo"]
+    out = run(["gh", "api", f"repos/{repo}/pulls/{n}", "--jq", ".head.sha"], f"gh api pulls/{n}")
+    head = out.strip()
+    shas = {r["head"]} | {x["sha"] for x in r["replies"] if "sha" in x} | \
+        {c["sha"] for c in r["changed"]}
+    for sha in sorted(shas):
+        if not on_branch(repo, sha, head):
+            raise Refused(f"{sha} is not on #{n}'s branch on GitHub (its head is {head}): "
+                          "push it first; a reply never names a commit that isn't pushed")
+    seen, skipped = pr_conversation(config, n)
+    if skipped:
+        print(f"left unread: {skipped} comments and reviews by others on #{n}")
+
+    def target(items, item_id, owner_asked, what):
+        item = items.get(item_id)
+        if item is None:
+            raise Refused(f"{what}: not on #{n}")
+        if not item["trusted"] and not owner_asked:
+            raise Refused(f"{what}: by someone outside the project; answered only when the owner "
+                          "says so (owner_asked)")
+        return item
+
+    for x in r["replies"]:
+        t = target(seen["comments"], x["thread"], x.get("owner_asked"), f"thread {x['thread']}")
+        if t["in_reply_to_id"]:
+            raise Refused(f"thread {x['thread']}: a reply, not the start of a thread")
+    answered = [(target(seen["reviews" if a["to"] == "review" else "conversation"], a["id"],
+                        a.get("owner_asked"), f"{a['to']} {a['id']}")["url"], a["text"])
+                for a in r["answers"]]
+    replies = [(f"thread {x['thread']} round {k}", x, respond_reply_body(n, k, x))
+               for x in r["replies"]]
+    comment = round_comment_body(n, r, answered)
+    text_gate(config, pad, [(key, "", body) for key, _, body in replies] +
+              [(f"round {k}", "", comment)])
+    found = {}
+    for items in seen.values():
+        for item in items.values():
+            for m in RESPOND_MARKER.finditer(item["body"]):
+                if m.group(1) == str(n):
+                    found.setdefault(m.group(2), {"id": item["id"], "url": item["url"]})
+    body_path = pad / ".respond-body"
+    todo = [(key, "reply", body,
+             lambda x=x, body=body, key=key: gh_post(
+                 f"repos/{repo}/pulls/{n}/comments/{x['thread']}/replies", {"body": body},
+                 body_path, f"gh api reply ({key})"))
+            for key, x, body in replies]
+    todo.append((f"round {k}", "comment", comment,
+                 lambda: gh_post(f"repos/{repo}/issues/{n}/comments", {"body": comment}, body_path,
+                                 f"gh api issues/{n}/comments (round {k})")))
+    try:
+        post_items(pad, todo, found, RESPOND_STATE_FILE)
+    finally:
+        body_path.unlink(missing_ok=True)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=["dry-run", "post", "question", "pr"])
+    parser.add_argument("command", choices=["dry-run", "post", "question", "pr", "respond"])
     parser.add_argument("args", nargs="*", help="question: the question's JSON file; "
-                        "pr: post <n>, or file <n> and the ids to file")
+                        "pr: post <n>, or file <n> and the ids to file; respond: <n>")
     parser.add_argument("--all", action="store_true",
                         help="pr file: every outside finding of the latest pass")
     parser.add_argument("--config", default="docs/review.json",
@@ -1055,6 +1271,14 @@ def main(argv=None):
         if args.all and (args.command != "pr" or args.args[:1] != ["file"]):
             raise Refused("--all is for pr file only")
         config = load_config(args.config)
+        if args.command == "respond":
+            if len(args.args) != 1 or not re.fullmatch(r"[1-9][0-9]*", args.args[0]):
+                raise Refused("respond: <n>, the pull request's number")
+            n = int(args.args[0])
+            pad = Path(args.pad or f"review/pr-{n}")
+            if not pad.is_dir():
+                raise Refused(f"work pad {pad}: not a folder")
+            return cmd_respond(config, pad, n)
         if args.command == "pr":
             if len(args.args) < 2 or args.args[0] not in ("post", "file") or \
                     not re.fullmatch(r"[1-9][0-9]*", args.args[1]):

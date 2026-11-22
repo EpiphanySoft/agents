@@ -2,7 +2,8 @@
 
 `file_review.py`, beside this file, files a review from two records the filing pass writes in the
 work pad, and files the owner's questions while an unattended review runs. Its `pr` commands post a
-pull request review's passes (the `pr-review` skill; see *A pull request: `pr`*). It parses no markdown: the unit files are read by the model pass, which writes the records.
+pull request review's passes (the `pr-review` skill; see *A pull request: `pr`*), and `respond` the
+author's answers (the `pr-respond` skill; see *The author's round: `respond`*). It parses no markdown: the unit files are read by the model pass, which writes the records.
 Python 3 standard library and the `gh` CLI, signed in to an account that may create issues and
 security advisories in the repository.
 
@@ -12,6 +13,7 @@ python3 <skill>/file_review.py post    [--config docs/review.json] [--pad review
 python3 <skill>/file_review.py question <question.json> [--config ...] [--pad ...]
 python3 <skill>/file_review.py pr post <n> [--config ...] [--pad review/pr-<n>]
 python3 <skill>/file_review.py pr file <n> (<id> ... | --all) [--config ...] [--pad ...]
+python3 <skill>/file_review.py respond <n> [--config ...] [--pad review/pr-<n>]
 ```
 
 Run from the repository's root. `<skill>` is this folder, wherever the project's pin of the shared
@@ -221,6 +223,51 @@ of the outside list, no reply. Each run names the ids it kept back.
     calls that make something are the review with event `COMMENT`, the replies, the issues and the
     advisories.
 
+## The author's round: `respond`
+
+The author's side keeps its records in the same local work pad, `review/pr-<n>/`: one
+`round-<k>.json` per round, numbered from 1 without a gap, and `respond-state.json`, what was posted.
+`respond <n>` posts the latest round.
+
+| Field | | What |
+|---|---|---|
+| `pr` | required | the pull request's number |
+| `round` | required | `k`, the file's own number |
+| `head` | required | the full commit the round ends at, pushed |
+| `replies` | required | one per answered thread: `{"thread", "outcome", ...}` (below) |
+| `answers` | required | answers to comments that have no thread: `{"to": "review" \| "comment", "id", "text"}`, a review's body or a comment in the conversation, by its id; posted in the round's comment |
+| `changed` | required | `[{"sha", "what"}]`, the round's commits, one line each |
+| `waiting` | required | a list: what waits on the owner |
+| `unanswered` | required | a list: the comments not answered, by link and why (by someone outside the project, say) |
+
+A reply's `thread` is the id of the review comment that starts it; its `outcome` sets the rest:
+
+| `outcome` | Needs | The reply |
+|---|---|---|
+| `fixed` | `sha`, `how` (one line), `test` | "Fixed in <sha>: <how>" and "Proved by <test>." |
+| `done` | `sha`, `text` | "Already done in <sha>: <text>" |
+| `answer` | `text` | the answer |
+| `waiting` | (`text`) | "Waiting on the owner's decision." |
+
+`decision`, on any reply, opens it with "The owner decided: <decision>", for the round after a walk
+thru. `owner_asked: true`, on a reply or an answer, lets it go to a comment by someone outside the
+project, which is refused without it.
+
+- **Only pushed commits.** Every `sha` in the round, and its `head`, must be the pull request's head on
+    GitHub or one of its ancestors (`gh api repos/<repo>/compare/<sha>...<head>`); a round naming any
+    other is refused before anything is posted.
+- **Only the project's people.** Of the pull request's review comments, conversation comments and
+    reviews, only those whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR` are read;
+    the others keep only their id, thread and link, and are counted ("left unread: 3 ...").
+- **The gates.** Every reply and the round's comment are text-checked before anything is posted. Then
+    each reply goes on its thread (`POST .../pulls/<n>/comments/<thread>/replies`), and the round's
+    comment, last, on the pull request (`POST .../issues/<n>/comments`): what changed, the answers,
+    what waits on the owner, what was not answered. A reply ends
+    `<!-- pr-respond <n> thread <thread> round <k> -->`, the comment `<!-- pr-respond <n> round <k> -->`;
+    as with `pr`, a run again records what it finds by its marker rather than posting it twice.
+- **Never** closes, edits, resolves, approves or requests changes, marks the pull request ready or
+    asks for a review: replies and the one comment are all it makes.
+
 ## Tests
 
 `test_file_review.py` runs the script against a stub `gh` on `PATH` in a temp directory, so nothing
@@ -230,7 +277,10 @@ question filed, kept private, not filed and failing its text check, and that not
 edited. For `pr`: a first pass, a run again after a partial post and after a review made but not
 recorded, a second pass replying on threads, filing the chosen outside findings, a failing text
 check, markers planted by others, refused records, that exploitable claims reach no `gh` call, and
-that no forbidden call is made.
+that no forbidden call is made. For `respond`: a round's replies and its comment, a later round with
+the owner's decision, a run again after a partial post and after a reply made but not recorded, a
+commit not pushed, comments by others left unread and counted, a failing text check, refused records,
+and that no forbidden call is made.
 
 ```
 python3 skills/review/test_file_review.py
