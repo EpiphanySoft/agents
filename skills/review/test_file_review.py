@@ -544,7 +544,7 @@ HEAD2 = "2" * 40
 
 
 def pr_finding(fid, title, line, **extra):
-    record = finding(fid, title, **extra)
+    record = finding(fid, title, **{"class": "regression", **extra})
     record.pop("area")
     record["at"] = {"file": "src/core.py", "line": line}
     return record
@@ -563,19 +563,23 @@ def first_pass():
             pr_finding("P1-2", "A forged token is accepted.", 30, kind="security",
                        severity="High", exploitable=True,
                        what_goes_wrong="A forged token opens the admin page."),
-            pr_finding("P1-3", "The retry has no test.", 40, kind="test gap", severity="Low"),
+            pr_finding("P1-3", "The retry has no test.", 40, kind="test gap", severity="Low",
+                       **{"class": "latent"}),
             # A plausible claim: a question for the owner, kept in the work pad.
             pr_finding("P1-7", "A retry may count as a second request.", 44, kind="differs",
                        question=True, what_goes_wrong="Whether a retry is billed twice."),
         ],
-        "outside": [
+        "additional": [
             finding("P1-4", "Two documents give different timeouts.", kind="differs",
-                    area="docs", code=[]),
-            finding("P1-5", "An old helper is never called.", kind="untraced", severity="Low"),
+                    area="docs", code=[], **{"class": "latent"}),
+            # A regression in code the diff didn't touch: it can't be pinned to a changed line.
+            finding("P1-5", "An old helper now fails on the new limit.", severity="Low",
+                    **{"class": "regression"}),
             finding("P1-6", "A replayed request is accepted.", kind="security", severity="High",
-                    exploitable=True, what_goes_wrong="A replayed request moves the money twice."),
+                    exploitable=True, what_goes_wrong="A replayed request moves the money twice.",
+                    **{"class": "latent"}),
             finding("P1-8", "The guide may mean days, not hours.", kind="differs", area="docs",
-                    code=[], question=True),
+                    code=[], question=True, **{"class": "latent"}),
         ],
         "replies": [],
     }
@@ -586,7 +590,7 @@ def second_pass():
         **first_pass(), "pass": 2, "head": HEAD2, "base": HEAD1[:7],
         "verdict": "The bug is fixed; the test gap holds.",
         "findings": [pr_finding("P2-1", "The new branch leaks a file.", 55, severity="Low")],
-        "outside": [],
+        "additional": [],
         "replies": [
             {"id": "P1-1", "status": "fixed", "sha": "3333333",
              "evidence": "`src/core.py:12` now reads `if n <= limit:`."},
@@ -644,10 +648,12 @@ class PrReviewTest(unittest.TestCase):
         self.assertEqual(review["commit_id"], HEAD1)
         body = review["body"]
         for part in ("**pr-review, pass 1**", "from the merge base (abcdef0)",
-                     "**Verdict:** Built to R1", "High 0, Med 1, Low 1", "## What was read",
-                     "- R1 at the head", "## Outside this PR",
-                     "- severity Med, the documents: Two documents give different timeouts.",
-                     "- severity Low, `src/core.py:12`: An old helper is never called.",
+                     "**Verdict:** Built to R1",
+                     "**Findings:** regression High 0, Med 1, Low 1; latent High 0, Med 1, Low 1 "
+                     "(2 on their lines, 2 additional)", "## What was read",
+                     "- R1 at the head", "## Additional findings",
+                     "- [latent] severity Med, the documents: Two documents give different timeouts.",
+                     "- [regression] severity Low, `src/core.py:12`: An old helper now fails",
                      "**Level:** Standard, checked", "the `pr-review` skill at e4f5a6b",
                      "- discovery: model-a, high, 120,000 tokens"):
             self.assertIn(part, body)
@@ -656,7 +662,8 @@ class PrReviewTest(unittest.TestCase):
         self.assertEqual([(c["path"], c["line"], c["side"]) for c in comments],
                          [("src/core.py", 12, "RIGHT"), ("src/core.py", 40, "RIGHT")])
         self.assertTrue(comments[0]["body"].startswith(
-            "severity Med\n\n**A value on the limit is dropped.**\n"))
+            "[regression] severity Med\n\n**A value on the limit is dropped.**\n"))
+        self.assertTrue(comments[1]["body"].startswith("[latent] severity Low\n"))
         for part in ("**Kind:** bug", "if n < limit:", "**What goes wrong**", "**Remedy**"):
             self.assertIn(part, comments[0]["body"])
         self.assertNotIn("A choice for the owner", body + json.dumps(comments))
@@ -690,7 +697,8 @@ class PrReviewTest(unittest.TestCase):
         self.assertIn("from pass 1's head, leaving out what came in with a merge of the target "
                       f"({HEAD1[:7]})", body)
         self.assertIn("**Earlier findings:** 1 fixed, 1 still hold", body)
-        self.assertIn("High 0, Med 0, Low 1", body)
+        self.assertIn("regression High 0, Med 0, Low 1; latent High 0, Med 0, Low 0 "
+                      "(1 on their lines, 0 additional)", body)
         self.assertEqual(store["reviews"][1]["event"], "COMMENT")
         threads = {c["body"].rsplit("<!-- pr-review 74 ", 1)[1].split(" ")[0]: c["id"]
                    for c in store["comments"] if not c["in_reply_to_id"]}
@@ -746,9 +754,9 @@ class PrReviewTest(unittest.TestCase):
         reply = next(c for c in store["comments"] if c["in_reply_to_id"])
         self.assertNotEqual(reply["in_reply_to_id"], 1)
 
-    # ---- filing outside findings ----
+    # ---- filing additional findings ----
 
-    def test_files_only_the_outside_findings_the_owner_chose(self):
+    def test_files_only_the_additional_findings_the_owner_chose(self):
         self.post_first()
         done = self.pr("file", "74", "P1-4")
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -757,8 +765,9 @@ class PrReviewTest(unittest.TestCase):
         self.assertEqual(issues[0]["title"], "Two documents give different timeouts.")
         self.assertEqual(issues[0]["labels"], ["review", "area:docs"])
         body = issues[0]["body"]
-        self.assertTrue(body.startswith("severity Med\n"))
-        self.assertIn("**Found by:** the review of #74, pass 1, outside its diff; work-pad id P1-4",
+        self.assertTrue(body.startswith("severity Med\nclass latent\n\n**Kind:** differs"))
+        self.assertIn("**Found by:** the review of #74, pass 1, one of its additional findings; "
+                      "work-pad id P1-4",
                       body)
         self.assertTrue(body.endswith("<!-- pr-review 74 P1-4 issue -->\n"))
         # --all files the rest of the latest pass's list, never the exploitable one.
@@ -766,7 +775,9 @@ class PrReviewTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual([i["title"] for i in self.store()["issues"]],
                          ["Two documents give different timeouts.",
-                          "An old helper is never called."])
+                          "An old helper now fails on the new limit."])
+        self.assertTrue(self.store()["issues"][1]["body"].startswith(
+            "severity Low\nclass regression\n"))
         self.assertEqual(self.store()["advisories"], [])
         self.assertIn("kept in the work pad, flagged exploitable: P1-6", done.stdout)
         self.assertIn("kept in the work pad, questions for the owner: P1-8", done.stdout)
@@ -806,9 +817,9 @@ class PrReviewTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("text check failed for P1-3", done.stderr)
         self.assertEqual(self.calls(), [])
-        # The outside list is in the review's body, so a bad title stops the review too.
+        # The additional findings are in the review's body, so a bad title stops the review too.
         record["findings"][2]["remedy"] = "Add a test."
-        record["outside"][1]["title"] = "A FORBIDDEN helper."
+        record["additional"][1]["title"] = "A FORBIDDEN helper."
         self.write_pass(record)
         self.assertEqual(self.pr("post", "74").returncode, 1)
         self.assertEqual(self.calls(), [])
@@ -839,7 +850,8 @@ class PrReviewTest(unittest.TestCase):
         for text in ("P1-7", "P1-8", "second request", "billed twice", "days, not hours"):
             self.assertNotIn(text, sent)
         # The counts hold only the findings posted: P1-1 (Med) and P1-3 (Low).
-        self.assertIn("High 0, Med 1, Low 1", self.store()["reviews"][0]["body"])
+        self.assertIn("regression High 0, Med 1, Low 1; latent High 0, Med 1, Low 1",
+                      self.store()["reviews"][0]["body"])
         replies = [c for c in self.store()["comments"] if c["in_reply_to_id"]]
         self.assertEqual(len(replies), 2)
 
@@ -854,7 +866,8 @@ class PrReviewTest(unittest.TestCase):
         sent = self.everything_sent()
         for text in ("forged", "replayed", "P1-2", "P1-6", "old helper", "P1-5"):
             self.assertNotIn(text, sent)
-        self.assertIn("High 0, Med 1, Low 1", self.store()["reviews"][0]["body"])
+        self.assertIn("regression High 0, Med 1, Low 0; latent High 0, Med 1, Low 1 "
+                      "(2 on their lines, 1 additional)", self.store()["reviews"][0]["body"])
         self.assertEqual(len(self.store()["issues"]), 1)
 
     def test_no_forbidden_call_is_ever_made(self):
@@ -903,6 +916,14 @@ class PrReviewTest(unittest.TestCase):
              "reply P1-1.sha: a fixed finding names its commit"),
             (dict(second_pass(), pr=75), "pass-2.json.pr: 75, not 74"),
             (dict(second_pass(), level="Gold"), "pass-2.json.level: must be one of"),
+            (dict(second_pass(), findings=[{k: v for k, v in
+                                            pr_finding("P2-1", "No class.", 3).items()
+                                            if k != "class"}]),
+             "pass-2.json.findings[0].class: missing"),
+            (dict(second_pass(), findings=[pr_finding("P2-1", "Odd.", 3, **{"class": "new"})]),
+             "pass-2.json.findings[0].class: must be one of regression, latent"),
+            (dict(second_pass(), additional=[finding("P2-2", "No class.")]),
+             "pass-2.json.additional[0].class: missing"),
         ]
         for record, needle in cases:
             self.write_pass(record)

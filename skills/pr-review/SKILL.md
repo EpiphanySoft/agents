@@ -1,6 +1,6 @@
 ---
 name: pr-review
-description: Review one open pull request against the project's requirements, and post what it finds on the pull request. Use when the owner asks for a pass on a pull request ("review PR #74", "again" after a push, "run a premium pr-review on #74", "/pr-review plus 74"). Covers the pass's input, the work pad, the level, posting one COMMENT review with line comments, findings outside the diff, plausible and exploitable claims, and passes after a push. The built-in /code-review is the quick correctness check of a diff; this asks the requirement questions, with the review skill's claims, checking and confirmations.
+description: Review one open pull request against the project's requirements, and post what it finds on the pull request. Use when the owner asks for a pass on a pull request ("review PR #74", "again" after a push, "run a premium pr-review on #74", "/pr-review plus 74"). Covers the pass's input, the work pad, the level, classing each finding as regression or latent, posting one COMMENT review with line comments and additional findings, plausible and exploitable claims, and passes after a push. The built-in /code-review is the quick correctness check of a diff; this asks the requirement questions, with the review skill's claims, checking and confirmations.
 ---
 
 # Pull request review
@@ -58,40 +58,54 @@ level named anywhere in the request picks it ("run a premium pr-review on #74", 
 74", `/pr-review premium 74`) and carries over to later passes on the same pull request until the owner
 names another. The record names each piece's model, effort and tokens.
 
+## Regression or latent
+
+Every finding has a **class**:
+
+- **regression**: a bug the pull request introduces or makes worse, breakage in code it didn't touch
+    included;
+- **latent**: it is there at the merge base, and the pull request doesn't make it worse.
+
+The class rests on reading or running the code at both the merge base and the head. The checker
+confirms the class along with the claim; a class it changes is a correction (*Checking*).
+
 ## Posting a pass
 
 One GitHub review per pass, always with event **COMMENT**: approving and requesting changes stay the
 owner's. There is no dry run; the pass posts after the automatic gates, the text check on every body
 and comment and the markers, and the owner reads it on the pull request.
 
-- **Each finding on the diff** is a line comment on its line, starting `severity High|Med|Low`, with
-    its claim, evidence and remedy.
-- **The review's body** is the summary: the verdict, counts by severity, what was read, *Outside this
-    PR*, and how it ran (level, models, efforts, tokens).
+- **A finding pinned to a changed line** is a line comment on that line, starting with its class in
+    brackets and then its severity (`[regression] severity High`, `[latent] severity Low`), with its
+    claim, evidence and remedy.
+- **The review's body** is the summary: the verdict, counts by class and severity, what was read,
+    *Additional findings*, and how it ran (level, models, efforts, tokens).
 - **Only confirmed and corrected findings** are posted and counted (*Plausible claims*).
 
 The pass writes `pass-<k>.json`, then runs `file_review.py pr post <n>` from the repository's root.
 After a stop, it runs it again: the markers keep anything from being posted twice.
 
-## Outside this PR
+## Additional findings
 
-A finding the pull request didn't cause (old code it reads, a document it doesn't change) goes in the
-review's body under *Outside this PR*: title, file and line, severity. It is filed as an issue, in the
-review skill's finding shape, only when the owner says so, all or some:
-`file_review.py pr file <n> <id> ...`, or `--all` for the latest pass's list.
+A finding that can't be pinned to a changed line, of either class (a regression in code the diff
+didn't touch, old code it reads, a document it doesn't change), goes in the review's body under
+*Additional findings*, with the same prefix: class, severity, title, file and line. It is filed as an
+issue, in the review skill's finding shape with `severity` still its first line and the class on the
+next, only when the owner says so, all or some: `file_review.py pr file <n> <id> ...`, or `--all` for
+the latest pass's list.
 
 ## Plausible claims
 
 A claim the checker rated plausible is a question for the owner, not a finding: it is never posted,
-counted or put on the outside list. It stays in the work pad with `question` set, and the agent's
+counted or put in the additional findings. It stays in the work pad with `question` set, and the agent's
 report lists each one as a walk-thru item: the question, the options and the recommendation (the
 shared `CLAUDE.md` rule). The owner's answer either makes it a finding of the next pass ("post it"),
 under that pass's own id and with the decision, or drops it.
 
 ## Exploitable claims
 
-A claim flagged exploitable is never posted or mentioned in public: no line comment, no line on the
-outside list, no count, no reply. It stays in the work pad, and the agent's report to the owner names
+A claim flagged exploitable is never posted or mentioned in public: no line comment, no line in the
+additional findings, no count, no reply. It stays in the work pad, and the agent's report to the owner names
 it with its evidence. The owner decides: a private draft advisory (`file_review.py pr file <n> <id>`),
 a word with the author, or posting it (the owner clears its flag, and the next pass posts it).
 
@@ -119,5 +133,5 @@ script reads markers and threads the same way.
 ## The agent's report
 
 Short, to the owner: the review's link, the verdict and counts; the exploitable claims with their
-evidence; the outside list, for the owner to say which to file; the plausible claims and any other
+evidence; the additional findings, for the owner to say which to file; the plausible claims and any other
 questions, as a walk thru (the shared `CLAUDE.md` rule); the comments by others left unread; and any failure, as it happened.

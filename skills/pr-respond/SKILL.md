@@ -32,6 +32,11 @@ Each answered comment gets one outcome:
 | **a question** | it asks something | answered on its thread |
 | **already done** | an earlier commit fixed it, or it is out of date | replied to with the commit |
 
+**A `pr-review` finding's class** (`pr-review`'s *Regression or latent*) sets whose it is. A
+`[regression]` comment is the pull request's to fix: a clear fix when the fix follows from it. A
+`[latent]` one is answered, and fixing it here is optional: the author fixes it or leaves it, and the
+reply says which.
+
 ## Fixing
 
 A project may add to these in its docs (its test commands, the containers or VMs a fix is proved

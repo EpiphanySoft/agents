@@ -180,19 +180,26 @@ whose `name` the `pr` commands don't use. There is no dry run: the gates below a
 | `verdict` | required | one line |
 | `read` | required | a list: what was read (sections, units, what was read whole) |
 | `pieces` | required | `[{"piece", "model", "effort", "tokens"}]`, what each piece ran on |
-| `findings` | required | the findings on the diff: the finding shape of `findings.jsonl`, with `area` optional and `at` added |
-| `outside` | required | the findings the pull request didn't cause: the finding shape of `findings.jsonl` |
+| `findings` | required | the findings pinned to a changed line: the finding shape of `findings.jsonl`, with `area` optional, and `class` and `at` added |
+| `additional` | required | the findings that can't be pinned to a changed line, of either class: the finding shape of `findings.jsonl`, with `class` added |
 | `replies` | required | `[{"id", "status", "sha", "evidence"}]`, one per earlier finding on the diff re-checked: `status` `fixed` (with `sha`, the commit that fixed it) or `holds` |
+
+`class` is `regression` (a bug the pull request introduces or makes worse, breakage in code it didn't
+touch included) or `latent` (it is there at the merge base, and the pull request doesn't make it
+worse). A line comment starts `[<class>] severity <severity>`, an entry of the review's *Additional
+findings* list the same, and the body's counts are split by class and severity. An issue filed from
+an additional finding keeps `severity <severity>` as its first line, with `class <class>` on the
+next.
 
 `at` is `{"file", "line", "start_line", "side"}`: the line of the diff at `head` the comment sits on,
 `start_line` for a span, `side` `RIGHT` (the new code, the default) or `LEFT` (a removed line). A line
 outside the diff makes GitHub refuse the whole review: the run stops, and the finding moves to a line
-of the diff, or to `outside`. Ids are unique across the pull request's passes, such as `P2-3` for
+of the diff, or to `additional`. Ids are unique across the pull request's passes, such as `P2-3` for
 pass 2's third.
 
 **Exploitable.** A finding with `exploitable: true`, or whose id is in the work pad's
 `exploitable.json`, is in no `gh` call of `pr post` or `pr file --all`: no comment, no count, no line
-of the outside list, no reply. Each run names the ids it kept back.
+of the additional findings, no reply. Each run names the ids it kept back.
 
 **Questions.** A finding with `question: true` is a plausible claim, a question for the owner: like
 an exploitable one it is in no `gh` call of `pr post`, and `pr file` refuses it, `--all` included.
@@ -207,9 +214,10 @@ of its own findings, under a new id, with `decision`.
     finding a line comment; then each reply on its finding's thread
     (`POST .../pulls/<n>/comments/<id>/replies`). A reply whose thread isn't found is refused before
     anything is posted.
-- **`pr file <n> <id> ...`** files the outside findings the owner chose as issues, in the finding
-    shape and labels of *The issue body*, with a line saying which pass found it. `--all` takes every
-    outside finding of the latest pass but the exploitable ones. An exploitable id, named on its own,
+- **`pr file <n> <id> ...`** files the additional findings the owner chose as issues, in the finding
+    shape and labels of *The issue body* with its class, and a line saying which pass found it.
+    `--all` takes every additional finding of the latest pass but the exploitable ones and the
+    questions. An exploitable id, named on its own,
     is filed as a private draft security advisory, the way a full review files one. A finding on the
     diff is refused: it is on its line already. Every title and body is text-checked before anything
     is filed.
@@ -280,7 +288,7 @@ reaches GitHub: the dry run, a post, a run again after a partial post or after a
 recorded, bad configs and records, a failing text check, the kind labels and exploitable marks, a
 question filed, kept private, not filed and failing its text check, and that nothing is closed or
 edited. For `pr`: a first pass, a run again after a partial post and after a review made but not
-recorded, a second pass replying on threads, filing the chosen outside findings, a failing text
+recorded, a second pass replying on threads, filing the chosen additional findings, the classes and their prefixes, a failing text
 check, markers planted by others, refused records, that questions for the owner and exploitable
 claims reach no `gh` call, and
 that no forbidden call is made. For `respond`: a round's replies and its comment, a later round with

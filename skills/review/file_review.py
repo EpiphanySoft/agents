@@ -16,7 +16,7 @@ the marker each body ends with lets it find, rather than repeat, an item it made
 `question` files one question for the owner as a walk-thru issue, or keeps it in <pad>/questions.md
 when it can't be filed or its claim is flagged exploitable. `pr post` posts a pull request review's
 latest pass, <pad>/pass-<k>.json, as one review with event COMMENT and its replies on earlier findings'
-threads; `pr file` files the outside findings the owner chose. Both keep <pad>/pr-state.json, find what
+threads; `pr file` files the additional findings the owner chose. Both keep <pad>/pr-state.json, find what
 an earlier run posted by its marker, and leave out every claim flagged exploitable and every
 question for the owner. `respond` posts the
 author's round, <pad>/round-<k>.json: its replies on the reviewers' threads and one comment on the pull
@@ -291,8 +291,14 @@ MARKER = re.compile(r"<!-- review (\S+) (\S+) -->")
 
 
 def finding_body(config, f, review=None, end=None, title=False):
-    """review and end replace the review line and the marker; title puts the title first."""
-    lines = [f"severity {f['severity']}", ""]
+    """review and end replace the review line and the marker; title puts the title first. A pull
+    request's finding has a class: "[class] severity X" opens a line comment (title), and an issue's
+    body has "severity X", then "class X"."""
+    cls = f.get("class")
+    if cls and title:
+        lines = [f"[{cls}] severity {f['severity']}", ""]
+    else:
+        lines = [f"severity {f['severity']}"] + ([f"class {cls}"] if cls else []) + [""]
     if title:
         lines += [f"**{f['title']}**", ""]
     lines.append(f"**Kind:** {f['kind']}")
@@ -716,11 +722,20 @@ TRUSTED = {"OWNER", "MEMBER", "COLLABORATOR"}
 
 _SHA = {"type": "string", "pattern": r"^[0-9a-f]{7,40}$"}
 
+_CLASS = {"type": "string", "enum": ["regression", "latent"]}
+
+ADDITIONAL_SCHEMA = {
+    **FINDING_SCHEMA,
+    "required": FINDING_SCHEMA["required"] + ["class"],
+    "properties": {**FINDING_SCHEMA["properties"], "class": _CLASS},
+}
+
 PR_FINDING_SCHEMA = {
     **FINDING_SCHEMA,
-    "required": [r for r in FINDING_SCHEMA["required"] if r != "area"] + ["at"],
+    "required": [r for r in FINDING_SCHEMA["required"] if r != "area"] + ["class", "at"],
     "properties": {
         **FINDING_SCHEMA["properties"],
+        "class": _CLASS,
         "at": {
             "type": "object",
             "required": ["file", "line"],
@@ -738,7 +753,7 @@ PR_FINDING_SCHEMA = {
 PASS_SCHEMA = {
     "type": "object",
     "required": ["pr", "pass", "head", "base", "skill_commit", "level", "checking", "verdict",
-                 "read", "pieces", "findings", "outside", "replies"],
+                 "read", "pieces", "findings", "additional", "replies"],
     "additionalProperties": False,
     "properties": {
         "pr": {"type": "integer", "minimum": 1},
@@ -761,7 +776,7 @@ PASS_SCHEMA = {
             },
         },
         "findings": {"type": "array", "items": PR_FINDING_SCHEMA},
-        "outside": {"type": "array", "items": FINDING_SCHEMA},
+        "additional": {"type": "array", "items": ADDITIONAL_SCHEMA},
         "replies": {
             "type": "array",
             "items": {
@@ -786,7 +801,7 @@ def pr_keys(n):
 
 
 def load_passes(pad, n):
-    """{k: pass} from pass-<k>.json, and {id: (k, "findings" | "outside", record)} across them."""
+    """{k: pass} from pass-<k>.json, and {id: (k, "findings" | "additional", record)} across them."""
     passes = {}
     for path in sorted(pad.iterdir()):
         m = PASS_FILE.match(path.name)
@@ -809,7 +824,7 @@ def load_passes(pad, n):
         if k > 1 and not passes[k - 1]["head"].startswith(p["base"]):
             raise Refused(f"{where}.base: {p['base']} is not pass {k - 1}'s head "
                           f"{passes[k - 1]['head']}")
-        for part in ("findings", "outside"):
+        for part in ("findings", "additional"):
             for f in p[part]:
                 if f["id"] in ids:
                     raise Refused(f"{where} {f['id']}: the id is used twice on this pull request")
@@ -840,28 +855,33 @@ def asked(ids):
 
 
 def counts(findings):
-    return ", ".join(f"{s} {sum(f['severity'] == s for f in findings)}" for s in ("High", "Med", "Low"))
+    return "; ".join(
+        f"{c} " + ", ".join(f"{s} {sum(f['class'] == c and f['severity'] == s for f in findings)}"
+                            for s in ("High", "Med", "Low"))
+        for c in ("regression", "latent"))
 
 
 def where_of(f):
     return f"`{f['code'][0]['file']}:{f['code'][0]['line']}`" if f["code"] else "the documents"
 
 
-def pr_review_body(n, p, findings, outside, replies):
+def pr_review_body(n, p, findings, additional, replies):
     k = p["pass"]
     base = ("the merge base" if k == 1 else
             f"pass {k - 1}'s head, leaving out what came in with a merge of the target")
     lines = [f"**pr-review, pass {k}**: the head {p['head']}, from {base} ({p['base']})", "",
              f"**Verdict:** {p['verdict']}", "",
-             f"**Findings on their lines:** {counts(findings) if findings else 'none'}"]
+             f"**Findings:** {counts(findings + additional)} ({len(findings)} on their lines, "
+             f"{len(additional)} additional)"]
     if k > 1:
         fixed = sum(r["status"] == "fixed" for r in replies)
         lines.append(f"**Earlier findings:** {fixed} fixed, {len(replies) - fixed} still hold, "
                      "in replies on their threads")
     lines += ["", "## What was read", ""] + [f"- {t}" for t in p["read"]]
-    lines += ["", "## Outside this PR", ""]
-    lines += [f"- severity {f['severity']}, {where_of(f)}: {f['title']}" for f in outside] or ["- none"]
-    if outside:
+    lines += ["", "## Additional findings", ""]
+    lines += [f"- [{f['class']}] severity {f['severity']}, {where_of(f)}: {f['title']}"
+              for f in additional] or ["- none"]
+    if additional:
         lines += ["", "Filed as issues only when the owner says so."]
     lines += ["", "## How it ran", "",
               f"**Level:** {p['level']}, {p['checking']}. **Method:** the `pr-review` skill at "
@@ -958,9 +978,9 @@ def cmd_pr_post(config, pad, n):
     k, private, questions = p["pass"], flagged(pad, ids), asked(ids)
     local = private | questions
     findings = [f for f in p["findings"] if f["id"] not in local]
-    outside = [f for f in p["outside"] if f["id"] not in local]
+    additional = [f for f in p["additional"] if f["id"] not in local]
     replies = [r for r in p["replies"] if r["id"] not in local]
-    every = p["findings"] + p["outside"] + p["replies"]
+    every = p["findings"] + p["additional"] + p["replies"]
     kept = [x["id"] for x in every if x["id"] in private]
     held = [x["id"] for x in every if x["id"] in questions and x["id"] not in private]
     comments = []
@@ -973,7 +993,7 @@ def cmd_pr_post(config, pad, n):
             c.update(start_line=f["at"]["start_line"], start_side=c["side"])
         comments.append(c)
     review = {"commit_id": p["head"], "event": "COMMENT",
-              "body": pr_review_body(n, p, findings, outside, replies), "comments": comments}
+              "body": pr_review_body(n, p, findings, additional, replies), "comments": comments}
     bodies = [(f"{r['id']} reply {k}", r, reply_body(n, k, p, r)) for r in replies]
     text_gate(config, pad, [(f"pass {k}", "", review["body"])] +
               [(f["id"], "", c["body"]) for f, c in zip(findings, comments)] +
@@ -1007,9 +1027,9 @@ def cmd_pr_file(config, pad, n, chosen, every):
     private, questions = flagged(pad, ids), asked(ids)
     latest = passes[max(passes)]
     if every:
-        chosen = [f["id"] for f in latest["outside"] if f["id"] not in private | questions]
-        report_kept([f["id"] for f in latest["outside"] if f["id"] in private],
-                    [f["id"] for f in latest["outside"]
+        chosen = [f["id"] for f in latest["additional"] if f["id"] not in private | questions]
+        report_kept([f["id"] for f in latest["additional"] if f["id"] in private],
+                    [f["id"] for f in latest["additional"]
                      if f["id"] in questions and f["id"] not in private])
     items, areas = [], None
     for fid in dict.fromkeys(chosen):
@@ -1017,7 +1037,8 @@ def cmd_pr_file(config, pad, n, chosen, every):
             raise Refused(f"{fid}: no such finding on #{n}")
         k, part, f = ids[fid]
         found_by = f"**Found by:** the review of #{n}, pass {k}, " + \
-            ("outside its diff" if part == "outside" else "on its diff") + f"; work-pad id {fid}"
+            ("one of its additional findings" if part == "additional" else "on its diff") + \
+            f"; work-pad id {fid}"
         if fid in questions:
             raise Refused(f"{fid}: a question for the owner, never filed; once the owner decides, "
                           "it is a finding of the next pass")
@@ -1027,7 +1048,7 @@ def cmd_pr_file(config, pad, n, chosen, every):
             items.append((key, "advisory", {"id": fid, "title": f["title"], "body": body,
                                             "severity": SEVERITY_FOR_ADVISORY[f["severity"]]}))
             continue
-        if part != "outside":
+        if part != "additional":
             raise Refused(f"{fid}: a finding on the diff, posted on its line, not filed")
         if areas is None:
             areas = list_areas(config)
@@ -1277,7 +1298,7 @@ def main(argv=None):
     parser.add_argument("args", nargs="*", help="question: the question's JSON file; "
                         "pr: post <n>, or file <n> and the ids to file; respond: <n>")
     parser.add_argument("--all", action="store_true",
-                        help="pr file: every outside finding of the latest pass")
+                        help="pr file: every additional finding of the latest pass")
     parser.add_argument("--config", default="docs/review.json",
                         help="the project's review config (default docs/review.json)")
     parser.add_argument("--pad", help="the work pad (default review/<nnnn> from the config, "
