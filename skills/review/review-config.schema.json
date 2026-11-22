@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A project's code review config (docs/review.json)",
+  "description": "Read by the review skill's file_review.py. The script checks a config against this schema and refuses one that doesn't match, naming the field. It knows the keywords used here: type, required, properties, additionalProperties, enum, pattern, minLength, minimum, items, uniqueItems.",
+  "type": "object",
+  "required": ["repo", "name", "area_prefix"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional link to this schema, for editors."
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+      "description": "The repository the issues and advisories are filed in, as owner/name."
+    },
+    "name": {
+      "type": "object",
+      "required": ["prefix", "number"],
+      "additionalProperties": false,
+      "description": "The review's name: prefix \"CR\" and number 1 give the summary \"CR1: summary\", the branch code-review-0001 and the work pad review/0001.",
+      "properties": {
+        "prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9]*$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "area_prefix": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The start of every area label, such as \"area:\". A finding's area label is this prefix and its area."
+    },
+    "areas_command": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional. A command that prints the project's areas, one name a line, without the prefix. Without it, the areas are the repository's labels that start with area_prefix."
+    },
+    "labels": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true,
+      "description": "Optional. Labels added to every finding's issue."
+    },
+    "question_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional, \"question\" when left out. The label of a finding that is a choice for the owner, and of a question issue."
+    },
+    "text_check": {
+      "type": "string",
+      "pattern": "\\{file\\}",
+      "description": "Optional. A command run on every title and body before it is posted, with {file} standing for a file that holds them. A non-zero exit stops the post."
+    },
+    "advisory_package": {
+      "type": "object",
+      "required": ["ecosystem", "name"],
+      "additionalProperties": false,
+      "description": "Optional. The package a security advisory names. Without it: ecosystem \"other\" and the repository's name.",
+      "properties": {
+        "ecosystem": {
+          "type": "string",
+          "enum": ["rubygems", "npm", "pip", "maven", "nuget", "composer", "go", "rust", "erlang", "actions", "pub", "other", "swift"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
