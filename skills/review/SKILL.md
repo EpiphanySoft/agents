@@ -33,6 +33,7 @@ here for the rest:
     any of it changed;
 - **its mechanical-check command** and what it reports;
 - **its run and test commands** a claim may use to reproduce, and those a review never starts;
+- **the time cap for an unattended run** of a command over a minute (10 minutes, say);
 - **its settled records**: rejected ideas, and the labels for won't do, later and gap;
 - **claim kinds of its own**, if any (a project that handles money may add one for wrong figures);
 - **its target branch**, question label and labels, which must exist in the repository;
@@ -134,8 +135,11 @@ for unit 7's twelfth. A finding's lasting id is its issue's number, given when i
 6. **The settled stays settled.** The project's settled records, open questions and a review's
     decisions are not raised again without a new reason, which the claim states.
 7. **Run little.** A claim may be reproduced with one test or one command the project names.
-    Anything that takes over a minute is asked first; unattended, it isn't run, and the claim says it
-    rests on reading.
+    - **Attended**, anything that takes over a minute is asked first.
+    - **Unattended**, it runs anyway, capped: one command the project names, in the background, within
+        the machine's limits, under the project's time cap. Its start, PID and end go in `log.md`, and
+        at the cap it is stopped by its own PID. A claim whose run hit the cap says so, and rests on
+        reading.
 8. **End with the log.** A session's last act is its line in `log.md` and its commit.
 9. **Scratch stays out of the repository**, even for a moment.
 

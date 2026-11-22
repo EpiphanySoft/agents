@@ -19,7 +19,8 @@ it goes, and the checker adds a verdict beside each.
 - **Untraced code given to it**: <paths, or none>.
 - **Open questions it hangs on** (unattended): <question issue links, or none>. Review under each
     reading and tag each claim that depends on one.
-- **Run little**: <the project's commands a claim may use to reproduce, and what not to start>.
+- **Run little**: <the project's commands a claim may use to reproduce, what not to start, and the
+    time cap for an unattended run>.
 
 ## Claims
 
