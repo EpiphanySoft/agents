@@ -36,19 +36,20 @@ here for the rest:
 - **the time cap for an unattended run** of a command over a minute (10 minutes, say);
 - **its settled records**: rejected ideas, and the labels for won't do, later and gap;
 - **claim kinds of its own**, if any (a project that handles money may add one for wrong figures);
+- **its sweeps**: each one's label and steps, laid out by its planning (*Phase 0*);
 - **its target branch**, question label and labels, which must exist in the repository;
 - **its filing config**, `docs/review.json` (see *Filing*).
 
 ## Before Phase 0: the method lands
 
 The project's `docs/REVIEW.md`, its `docs/review.json` and the pin of the shared skills that carries
-this skill are on the target branch at the review's commit. The summary issue records the skill's
+this skill are on the target branch at the review's commit. The summary records the skill's
 commit. A fix to the method found during a review waits for the next review, unless the owner stops
 the review to take it.
 
 ## The choices
 
-A review makes three choices at Phase 0, and its summary issue records them.
+A review makes three choices at Phase 0, and its summary records them.
 
 1. **Scope.**
     - **Full**: all the code is read whole against its sections.
@@ -84,11 +85,11 @@ second blind run on sensitive code and on code new since the last review.
 |---|---|
 | `code-review-<nnnn>` | the review's branch, from the target at the review's commit; `<nnnn>` the review's number in four digits |
 | `review/<nnnn>/` on it | the work pad: everything a session needs from earlier ones |
-| issues and private advisories | the review's outcome, each standing on its own (*Filing*) |
+| issues under the sweep's steps, and private advisories | the review's outcome, each standing on its own (*Filing*) |
 
 **Local only.** The branch and work pad are never pushed and never merged: a fork may be public, and
 unchecked claims must not publish before the owner's read. The branch is kept until the next review
-has read it (its digests and rejected claims); the summary issue names the branch and its last
+has read it (its digests and rejected claims); the summary names the branch and its last
 commit; after that it may be deleted locally.
 
 **The commit.** A review reads one commit, recorded in `log.md` when Phase 0 starts. If something
@@ -103,6 +104,7 @@ coordinator checks). Each piece's work is committed before the next piece starts
 
 | File | Written by | What |
 |---|---|---|
+| `sweep.json` | Phase 0 | the sweep label and the review's own step (*Phase 0*) |
 | `log.md` | every session | one line a session: start and end (from `date`), the piece, its model and effort, what it wrote, what is left; failures as they happen |
 | `checks.txt` | Phase 0 | the mechanical checks' report |
 | `delta.txt` | Phase 0 | the change since the last review, per unit |
@@ -115,7 +117,7 @@ coordinator checks). Each piece's work is committed before the next piece starts
 | `exploitable.json` | the coordinator | the ids of the claims flagged exploitable if public |
 | `questions.md` | the coordinator | unattended: questions that could not be filed, and those that must stay private |
 | `findings.jsonl`, `summary.json` | filing | the records the filing script reads ([filing.md](filing.md)) |
-| `filing-dry-run.md`, `filing-state.json` | the script | the dry run the owner reads, and what was posted |
+| `filing-dry-run.md`, `filing-state.json` | the script | the dry run the owner reads, and what was filed and attached |
 
 The ids in the work pad are its own: `D1-4` for the fourth claim of Phase 1's first block, `U07-12`
 for unit 7's twelfth. A finding's lasting id is its issue's number, given when it is filed.
@@ -144,14 +146,22 @@ for unit 7's twelfth. A finding's lasting id is its issue's number, given when i
 8. **End with the log.** A session's last act is its line in `log.md` and its commit.
 9. **Scratch stays out of the repository**, even for a moment.
 
-## Phase 0: the checks, the map, the delta, the proposal
+## Phase 0: the sweep, the checks, the map, the delta, the proposal
 
 Phase 0 runs in the coordinating session, or its agent writes the proposal and the coordinator asks.
 
-1. **The mechanical checks.** The project's command reports what needs no judgement (citations of
+Every review is a sweep. A sweep is named for good by a label, `sweep:<shorthand>` (`sweep:H1`), and
+its genesis (the project's planning) lays out its steps up front: each an issue with no parent, the
+sweep label, a title `H<x>.<n> <what>` and the area labels it holds; a step may hold several areas,
+and an area has at most one open step. The review is one of the steps.
+
+1. **Its sweep.** The owner tells the review its sweep label and its own step's issue, if it has
+    one, when it starts. Phase 0 writes them to `sweep.json`, `{"label": "sweep:H1", "step": 41}`,
+    never to the project's config. Filing refuses a review with no sweep label.
+2. **The mechanical checks.** The project's command reports what needs no judgement (citations of
     missing ids, broken tables, stale references) into `checks.txt`, so no agent spends its context
     finding them by reading. What remains becomes Phase 1 claims.
-2. **The map.** One session builds `map.md`: for each requirement section, the code that builds it,
+3. **The map.** One session builds `map.md`: for each requirement section, the code that builds it,
     the tests that check it, and their sizes, starting from the code's citations and filling the rest
     from its layout and imports. It cuts the code into **units** of about 10,000 lines each:
     - a unit never crosses an area;
@@ -161,10 +171,10 @@ Phase 0 runs in the coordinating session, or its agent writes the proposal and t
         beside, whose session judges it;
     - units follow the project's own order (requirement order where the areas follow it), with the
         **tooling unit** last (*Phase 2*).
-3. **The delta.** From the last review's commit to this one's, per unit, renames found:
+4. **The delta.** From the last review's commit to this one's, per unit, renames found:
     `git diff -M --numstat <last>..<commit> -- <unit's paths>`. Summed against each unit's lines, it
     gives the share changed that the choices are recommended from. A first review has none.
-4. **The proposal.** Scope and checking; how the review runs; the models and effort for every piece;
+5. **The proposal.** Scope and checking; how the review runs; the models and effort for every piece;
     and, for a large review, whether it will run unattended, unless the owner has already said. The
     owner's answers go into `log.md`.
 
@@ -289,20 +299,25 @@ with the reason. Confirmations and decisions after filing are comments on its is
     decides it.
 - **Unattended.** Every question is filed as an issue with the project's question label, written as a
     walk-thru item (the question, the options, the recommendation), and walked thru on the owner's
-    return. `file_review.py question` files it ([filing.md](filing.md)), after the text check.
+    return. It is labelled and placed like the claim that raised it: the sweep label and the claim's
+    area label, a sub-issue of that area's step, titled like a finding (`H1.6-4 CR1 question: ...`).
+    A question about the review itself (Phase 0's, say) goes under the review's own step.
+    `file_review.py question` files it ([filing.md](filing.md)), after the text check.
 - **No unit waits.** A unit whose judgement hangs on an open question reviews under each reading and
     tags its claims with the question. Once the owner decides, the rejected reading's claims are
     dropped, recorded as rejected with the decision as the reason.
 - **Kept private.** A question about a claim that would be exploitable if public (its id is in
     `exploitable.json`) is never filed publicly: `question` keeps it in `questions.md`, and the issue it
-    files says only that one is waiting, without its content.
+    files says only that one is waiting, without its content or its area, under the review's own
+    step.
 - **Through the dry run.** Unattended, the review runs through the filing dry run; only posting waits
     for the owner's read.
 - **Failures don't halt it.** Unattended, a failure is an exception to the standing rule to stop when
     signing or pushing fails; its other half, never working around it, still holds. A commit that can't
     be signed stays uncommitted in the work pad (never unsigned, never another identity). A question
-    that can't be filed, or fails the text check, is written to `questions.md` by `question`. Each failure is logged in `log.md` as it
-    happens, and the report on the owner's return opens with them.
+    that can't be filed, finds no parent, or fails the text check, is written to `questions.md` by
+    `question`. Each failure is logged in `log.md` as it happens, and the report on the owner's
+    return opens with them.
 
 ## How a review runs
 
@@ -367,46 +382,61 @@ proposal.
 
 ## Filing
 
-Filing places nothing into plans. Each finding is its own issue:
+Filing makes no steps: the sweep's planning made them. Each finding is its own issue, a sub-issue of
+its area's step:
 
-- **a title** of one sentence; a finding that needs more is two findings;
+- **a title** of one sentence, `<step id>-<m> <sentence>` (`H1.6-3 A value on the limit is
+    dropped.`): the step id leads its parent's title, and `m` is one more than the highest among that
+    parent's sub-issues in any state, so a number is never used twice. A parent whose title has no
+    leading id gives the plain sentence. A finding that needs more is two findings;
 - **a body** that starts `severity High`, `severity Med` or `severity Low` and holds everything: kind,
     requirements, the quoted code, what goes wrong, how it was run, remedy, alternatives, and its
     agreed resolution if it has one. Nothing it needs is left in the work pad;
 - **one area label** from the project's areas: that of the first code it names, else its section's.
     A finding no code area owns gets the project's documents or tooling area if it has one, else none;
+- **the sweep label**;
 - **a kind label**, `<kind_prefix><kind>`, when the project's config sets `kind_prefix`; without it,
     the kind is in the body only;
-- **the question label** when it is a choice for the owner.
+- **the question label** when it is a choice for the owner;
+- **a parent**: the one open issue that carries its area label and the sweep label, has no parent of
+    its own, and is no finding (no finding's marker in its body). A finding with no area goes under
+    the review's own step, or, with none given, has no parent and the plain sentence. No match, or
+    two or more, and the dry run fails naming the area and the issues; the script never makes a
+    parent.
 
-A **summary issue**, "<prefix><n>: summary", lists every finding by link (a list, not sub-issues, so
-the one-parent slot stays free for planning) and records: the commit read and the last review's
-commit; the skill's commit; the branch and its last commit; the three choices; the models; the
-verdict in one line; what matters most; *checked and sound* (what was looked at closely and found
-right, so the next review need not repeat it); and *where things stand* (what was left unread or read
-lightly, and where to start). Steps, sub-issues under steps and project-board fields belong to the
-project's planning, not the review.
+**The summary** is a comment on the review's own step, posted last. It lists every finding by link
+and records: the commit read and the last review's commit; the skill's commit; the branch and its last
+commit; the three choices; the models; the verdict in one line; what matters most; *checked and sound*
+(what was looked at closely and found right, so the next review need not repeat it); and *where things
+stand* (what was left unread or read lightly, and where to start). A review given no step files it as
+an issue instead, "<prefix><n>: summary". Project boards are neither read nor written.
 
 **Exploitable findings.** A finding flagged exploitable if public (a security or privacy flaw)
-is filed as a private draft security advisory instead of a public issue. The dry run shows each
+is filed as a private draft security advisory instead of a public issue. An advisory can't be a
+sub-issue: its title is the plain sentence, with no parent and no number. The dry run shows each
 finding's mark, and the owner confirms or changes each one at the read. The summary gives only their
 count.
 
-**The script.** `file_review.py`, in this folder, files a review from `findings.jsonl` and
-`summary.json` in the work pad and the project's `docs/review.json` ([filing.md](filing.md)):
+**The script.** `file_review.py`, in this folder, files a review from `findings.jsonl`,
+`summary.json` and `sweep.json` in the work pad and the project's `docs/review.json`
+([filing.md](filing.md)):
 
 1. The filing pass (a model, see *Models and effort*) writes the two records from the work pad:
     every surviving claim, its issue text, its area, its exploitable mark, and the summary.
-2. `file_review.py dry-run` writes every issue and advisory it would make to `filing-dry-run.md` and
-    posts nothing. The owner reads it.
-3. `file_review.py post` posts exactly what the dry run showed, text-checking each body first,
-    and can be run again after a stop: a hidden marker in each body lets it find what an earlier run
-    posted, so it never posts a copy.
+2. `file_review.py dry-run` writes every issue and advisory it would make, with its parent and its
+    numbered title, to `filing-dry-run.md` and posts nothing. The owner reads it.
+3. `file_review.py post` posts exactly what the dry run showed: it finds each parent and number
+    again and refuses if one changed, then files each finding, text-checked first, and attaches it
+    under its parent. It can be run again after a stop: its state records each filing and each
+    attach, and a hidden marker in each body and in the summary lets it find what an earlier run
+    posted, so it does only what is missing and never posts a copy.
 
-A bug found by mutation testing (the `mutation` skill) is filed as a finding in the same shape, with
-its area's label. The script's `pr` commands post a pull request review's passes (the `pr-review`
-skill), and `respond` the author's answers on it (the `pr-respond` skill), with the same text check
-and markers.
+**Through a pull request.** A pull request for a sweep's issues carries the sweep label. A bug found
+by mutation testing (the `mutation` skill), and an additional finding a pull request review files
+(`pr file`), follow a sweep only through such a pull request: its sweep label, the same parent search
+and the same title rule. Outside one, the issue has no sweep label, no parent and a plain title. The
+script's `pr` commands post a pull request review's passes (the `pr-review` skill), and `respond` the
+author's answers on it (the `pr-respond` skill), with the same text check and markers.
 
 ## After the review
 
@@ -426,8 +456,10 @@ The skill ends at agreed resolutions. What it keeps:
     it isn't lost when the next review starts.
 
 **Issues are the owner's to close.** Agents never close an issue unless the owner explicitly asks,
-for that review. A pull request's "Closes #n" on the owner's merge is fine. Agents comment:
-confirmations, decisions, "PR #n opened", "merged as <sha>". A page that would read "pull request" or
+for that review. **"Closes #n" is the link to a fix**: a pull request that fixes a finding names it
+so, and needs no other line in its body for it; its close on the owner's merge is fine. A pull
+request for a sweep's issues carries the sweep label. Agents comment: confirmations, decisions,
+"PR #n opened" (for people reading the issue), "merged as <sha>". A page that would read "pull request" or
 "done by" from an issue's body reads the linked pull request instead. Closing isn't part of cleanup
 (the shared `CLAUDE.md` PR terms).
 
