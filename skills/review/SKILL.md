@@ -332,16 +332,21 @@ the pull request that fixed it; closed as not planned, by the owner, with the re
     dropped, recorded as rejected with the decision as the reason.
 - **Once answered.** A question doesn't stay a question. When the walk thru's final approval is
     given, every issue with the question label that it decided (a question issue, or a finding filed
-    as a choice for the owner) gets the decision as a comment, loses the question label, and takes
-    one of two ends. The walk thru's summary names the end of each, so the approval covers it:
+    as a choice for the owner) gets the decision as a comment and takes one of two ends. The walk
+    thru's summary names the end of each, so the approval covers it:
     - **Closed**, when the answer ends it: nothing follows from it, or everything that follows is
         another issue's already. A question answered before the findings are posted usually ends
         this way: its surviving claims are filed as findings that carry the decision as their agreed
         resolution, and it is closed once they are filed. Its closing comment links what holds the
-        answer. It is closed as completed, and the approval is the owner's ask to close it.
+        answer. It is closed as completed, and the approval is the owner's ask to close it. It
+        keeps the question label: an answered question is all it was and all it will be, and the
+        label finds it again among the closed issues.
     - **The work itself**, when the answer is something to do and no other issue holds it. It
-        stays open, retitled for the work in place of the question, its leading id kept, and is a
-        finding from then on: the decision's comment gives its severity, and its fix closes it.
+        loses the question label and stays open, retitled for the work in place of the question,
+        its leading id kept, and is a finding from then on: the decision's comment gives its
+        severity, and its fix closes it.
+    So an open issue with the question label is a choice still waiting for the owner, and a closed
+    one is a question answered, never a fix.
 - **What an answer opens.** An answer can call for more work than one issue holds. Work that
     follows directly from the answer and belongs to the issue's area is filed as that issue's
     sub-issue, with the sweep label and the area label and a plain title, and the issue stays open
@@ -577,9 +582,10 @@ on the claim. Whoever takes it up does this first, and it adds one. The steps:
 2. **Each confirmation or decision goes on its issue** as a comment. The only edit to a body after
     filing is a severity the owner changed in a walk thru, written as part of carrying out that
     decision.
-3. **No answered question keeps its label.** Each one is closed, or becomes the work, with what it
-    opens filed where it belongs (*The owner's questions*, "Once answered"). The one edit to a
-    title after filing is that of a question that became the work.
+3. **No answered question stays open as a question.** Each one is closed, keeping its label, or
+    becomes the work, without it, with what it opens filed where it belongs (*The owner's
+    questions*, "Once answered"). The one edit to a title after filing is that of a question that
+    became the work.
 4. **A quick review can be checked later**: a Confirmation pass over its claims raises their
     confirmations, and its summary then reads "quick, checked later".
 5. **A recommendation nobody takes up** gets an id in the project's gaps, questions or later work, so
