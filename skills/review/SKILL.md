@@ -167,7 +167,8 @@ of it: the sweep label `sweep:CR1`, the anchor, the step ids `CR1.1`, the marker
     review" with the sweep label and no area label, which is the review's own step: its summary and
     the questions about the review go there; and one **step** per area, in the areas' order, as the
     anchor's sub-issues: `CR1.<n> <area>`, with the area's label and the sweep label. So an area has
-    one step, and there are three levels: the anchor, its steps, their findings. A plan that stopped
+    one step, and there are three levels: the anchor, its steps, their findings. (A step with more
+    findings than a parent takes is cut into parts at Reporting; they are still one step.) A plan that stopped
     part-way is finished by running it again (`plan --sweep CR1`, as its stop says), never repeated.
     The coordinator then makes the branch `code-review-<N>` from the target. A later piece finds its review from its branch, or from
     an explicit `--sweep CR1`; nothing about the sweep is kept in the work pad or the config.
@@ -499,7 +500,17 @@ its area's step:
 - **a parent**: the one open sub-issue of the sweep's anchor that carries its area label and is no
     finding (no finding's marker in its body). The anchor is the one open issue with the sweep label,
     no parent and no finding's marker. A finding with no area goes under the anchor. No match, or two
-    or more, and the dry run fails naming the area and the issues; Reporting never makes a parent.
+    or more that are not one step's parts, and the dry run fails naming the area and the issues.
+
+**A step in parts.** A parent takes 100 sub-issues, GitHub's limit, so an area with more findings
+than its step has room for needs the step cut into parts. The dry run fails for each finding with
+no room and names the command, `file_review.py split <area> <parts>`. The coordinator runs it (with
+`--dry-run` first): it makes the missing parts under the anchor, each after the part before it,
+and titles them all alike but for their ends, "CR1.11 docs (1 of 2)", "CR1.11 docs (2 of 2)". The
+parts are one step: they share its id, one run of numbers crosses them, and findings fill the first
+and go on in the next. Then the dry run again. This is the one case in which Reporting makes a
+parent, and the one edit the script makes, the parts' titles. A question or a pull request's
+finding that meets a full step is told the same command.
 
 **The summary** is a comment on the anchor, posted last. It lists every finding by link
 and records: the commit read and the last review's commit; the skill's commit; the branch and its last
@@ -522,7 +533,8 @@ review from `findings.jsonl` and `summary.json` in the work pad and the project'
 1. The filing pass (a model, see *Models and effort*) writes the two records from the work pad:
     every surviving claim, its issue text, its area, its exploitable mark, and the summary.
 2. `file_review.py dry-run` writes every issue and advisory it would make, with its parent and its
-    numbered title, to `filing-dry-run.md` and posts nothing. The owner reads it.
+    numbered title, to `filing-dry-run.md` and posts nothing. When it names a split (*A step in
+    parts*), that is run and the dry run made again. The owner reads it.
 3. `file_review.py post` posts exactly what the dry run showed: it finds each parent and number
     again and refuses if one changed, then files each finding, text-checked first, and attaches it
     under its parent. It can be run again after a stop: its state records each filing and each

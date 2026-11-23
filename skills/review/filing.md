@@ -1,7 +1,7 @@
 # Reporting: the records and the script
 
-`file_review.py`, beside this file, lays out a review's sweep (Planning, `plan`), files the
-review from two records the filing pass writes in the work pad, and files the owner's questions while
+`file_review.py`, beside this file, lays out a review's sweep (Planning, `plan`), cuts a step that
+is full into parts (`split`), files the review from two records the filing pass writes in the work pad, and files the owner's questions while
 an unattended review runs. Its `pr` commands post a pull request review's passes (the `pr-review`
 skill; see *A pull request: `pr`*), and `respond` the author's answers (the `pr-respond` skill; see
 *The author's round: `respond`*). It parses no markdown: the unit files are read by the model pass,
@@ -10,6 +10,7 @@ may create labels, issues and security advisories in the repository.
 
 ```
 python3 <skill>/file_review.py plan [--dry-run] [--sweep CR1] [--config docs/review.json]
+python3 <skill>/file_review.py split <area> <parts> [--dry-run] [--sweep CR1] [--config ...]
 python3 <skill>/file_review.py dry-run [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
 python3 <skill>/file_review.py post    [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
 python3 <skill>/file_review.py question <question.json> [--sweep CR1] [--config ...] [--pad ...]
@@ -22,8 +23,8 @@ Run from the repository's root. `<skill>` is this folder, wherever the project's
 skills puts it.
 
 **Which review.** A review is named `<prefix><N>`, `CR1`: the prefix is the config's, and `N` its
-sweep's. `dry-run`, `post` and `question` take it from `--sweep CR1`, else from the branch they run
-on, `code-review-<N>`, and refuse when there is neither. The work pad defaults to `review/<N>`.
+sweep's. `split`, `dry-run`, `post` and `question` take it from `--sweep CR1`, else from the branch
+they run on, `code-review-<N>`, and refuse when there is neither. The work pad defaults to `review/<N>`.
 Nothing about the sweep is kept in the work pad or the config: the sweep is its label and its issues.
 
 ## The config: `docs/review.json`
@@ -77,6 +78,33 @@ already among the anchor's sub-issues isn't attached again, so a run after a sto
 missing: `plan --sweep CR1` finishes CR1, as the stop's message says. `--sweep` names only the sweep
 that exists or the next one. It prints the branch and work pad the review then uses.
 
+## A step in parts: `split`
+
+A parent takes 100 sub-issues and no more (GitHub's limit), so the step of an area with more
+findings than that is cut into **parts**. The parts are one step: they share its id and its area,
+and one run of numbers crosses them. `split <area> <parts>` gives the area's step that many parts,
+2 or more:
+
+1. **The parts** are found by their markers, in every state: the first is the step Planning made
+    (`<!-- review CR1 step <area> -->`), and part `k` ends `<!-- review CR1 part <k> <area> -->`.
+2. **Each missing part** is made: titled like the step, labelled like it (the area's label, the
+    sweep label and `labels`), and made a sub-issue of the anchor.
+3. **Its place.** Each part after the first is moved to directly follow the part before it among
+    the anchor's sub-issues (`PATCH repos/<repo>/issues/<anchor>/sub_issues/priority`), so the
+    anchor lists a step's parts together, ahead of the next area's step.
+4. **The titles.** Every part is titled the step's title and its place, `<title> (<k> of <parts>)`:
+    "CR1.11 docs (1 of 2)", "CR1.11 docs (2 of 2)". This retitling (`gh issue edit --title`) is the
+    one edit the script ever makes.
+
+Every title and body passes the text check before anything is made, and `--dry-run` says what it
+would make and retitle. Run again with the same number it makes only what is missing, as the stop's
+message says; with a higher one it adds parts and retitles them all; a lower one is refused, since
+a part is never removed. Between a part's attach and the last retitle the two issues are not yet
+one step's parts, and the parent search fails until the split is finished.
+
+`dry-run` names the split to run: a finding with no room has no parent, and its line gives the
+command with the number of parts that makes room for every finding of the plan.
+
 ## The findings: `findings.jsonl`
 
 One JSON object a line, one line per surviving finding (confirmed, corrected, or, in a quick review,
@@ -127,22 +155,30 @@ the filing pass writes `findings.jsonl`.
 
 ## Parents and titles
 
-- **The anchor** is the one open issue with the sweep label, no parent and no finding's marker,
-    found through GraphQL (`repository.issues(states: OPEN, labels: [<sweep label>])`, with each
+- **The anchor** is the one open issue with the sweep label, no parent and no marker of a finding,
+    a step or a part, found through GraphQL (`repository.issues(states: OPEN, labels: [<sweep label>])`, with each
     one's `parent`), once a run. A finding's marker is a review's `<!-- review <name> <id> -->`
     (a question's included) or a pull request review's `<!-- pr-review <n> <id> issue -->`; the
     anchor's and the steps' markers are not. None, or two or more, and the command is refused naming
     them: Planning makes the anchor.
 - **The parent search.** A finding's parent is the one open sub-issue of the anchor that carries the
     finding's area label and is no finding. A finding with no area goes under the anchor. No match,
-    or two or more, and the search fails naming the area and the issues. Reporting never makes a parent.
+    or two or more that are not one step's parts, and the search fails naming the area and the
+    issues. Reporting never makes a parent.
+- **A step in parts.** Two or more such sub-issues are one step's parts when their titles are alike
+    but for their ends, "(1 of 2)", "(2 of 2)", each place taken once (*A step in parts: `split`*).
+    The parent is then the part that holds the item already, found by its marker among the parts'
+    sub-issues, else the first part with room for one more of its 100, what the run has placed
+    there counted. So findings fill the first part and go on in the next, and a run after a stop
+    places each one where the run before did. No room in any part, or under the anchor, and the
+    search fails naming the split that makes it; the anchor is never split.
 - **The title rule.** A finding's title is `<step id>-<m> <sentence>`. The step id is the leading id
     of the parent's title: the sweep's own name (`CR1` of the anchor's "CR1 Code review") or the
     name and `.<n>` (`CR1.3` of "CR1.3 core"), at the start, followed by a space or the end. Any
     other title ("Fix2 things", another sweep's "CR2.3 core") has no id. `m` is one more than the
-    highest `<step id>-<m>` among the parent's sub-issues' titles, in every state
-    (`GET repos/<repo>/issues/<parent>/sub_issues`), so a number is never used twice. Findings under
-    one parent take the next numbers in the plan's order. A parent whose title has no leading id
+    highest `<step id>-<m>` among the titles of the parent's sub-issues and of those of the step's
+    other parts, in every state (`GET repos/<repo>/issues/<parent>/sub_issues`), so a number is
+    never used twice. Findings of one step take the next numbers in the plan's order. A parent whose title has no leading id
     gives the plain sentence. A sub-issue with the marker of an item being filed is left out of the
     count, so a run again after a stop gives the same numbers.
 - **Attaching.** `POST repos/<repo>/issues/<parent>/sub_issues` with `sub_issue_id`, the issue's
@@ -177,8 +213,8 @@ the filing pass writes `findings.jsonl`.
     comments, only those whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`, so a
     marker someone else planted can't stop it. So a run that stopped between making an item and
     recording it leaves no copy.
-- **Never** closes or edits an issue, makes a parent outside `plan`, or reads or writes a project
-    board.
+- **Never** closes an issue, edits one but to retitle a step's parts in `split`, makes a parent
+    outside `plan` and `split`, or reads or writes a project board.
 - A bad config or record is refused (exit 2) before anything is posted.
 
 ## The issue body
@@ -387,6 +423,15 @@ filing under them; the next number after the highest label; a label made by some
 stopping it; a plan that stopped after its label, or between a step and its attach, finished by a
 run again without a copy; the steps in `areas_command`'s order; a failing text check making nothing;
 and refused names.
+
+For `split`: a step with no room failing the dry run and naming the split, with the parts that
+make room for every finding; the anchor never split; the dry run making nothing; the part made,
+placed after the first and both retitled, with the title the only edit; a step split again into
+more parts, and fewer refused; a split that stopped at each of its steps finished by a run again
+without a copy; a failing text check making nothing; findings filling the first part and going on
+in the next with one run of numbers, a later question after them; a post that stopped part-way
+giving the same plan and going on in the same parts; and a question for a full step kept, naming
+the split.
 
 For `pr`: a first pass, a run again after a partial post and after a review made but not recorded, a
 second pass replying on threads, filing the chosen additional findings, the classes and their
