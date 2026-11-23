@@ -12,8 +12,8 @@ method's, and its findings carry the review skill's evidence and confirmations.
 
 Everything shared is the `review` skill's, by its sections, and is not repeated here: *A session's
 habits*, the claim kinds and format (*Initial Code Review*), *Exploitable if public*, *The second blind
-run*, *Confirmation*, *Confirmations and status*, *The owner's questions*, *Models and effort*, and the
-issue shape of *Reporting*. The project supplies what *What a project supplies* lists. This skill defines
+run*, *Confirmation*, *Confirmations and status*, *The owner's questions*, *Models and effort*, *Refusals
+and model changes*, and the issue shape of *Reporting*. The project supplies what *What a project supplies* lists. This skill defines
 only what differs for a pull request.
 
 ## When a pass runs
@@ -58,6 +58,21 @@ sensitive code the diff touches; at Premium also on the other touched areas (its
 level named anywhere in the request picks it ("run a premium pr-review on #74", "plus review of PR
 74", `/pr-review premium 74`) and carries over to later passes on the same pull request until the owner
 names another. The record names each piece's model, effort and tokens.
+
+## Refusals and model changes
+
+A pass has no dry run, so the review skill's check (*Refusals and model changes*) comes before
+`pr post`. Each piece's models and refusals are read from the tool's record
+(`piece_models.py`, beside the filing script). A piece that was refused or changed model is settled
+as that section says, asking again by its steps, and nothing of it is posted until then. A pass is
+often left to run by itself, so it follows the unattended rule: it never waits on a refusal, and it
+never posts a verdict from a checker that fell onto the model that made the claim.
+
+- **The record's `pieces`** hold the model each piece ran on.
+- **The review's body** says, under how it ran, any refusal or model change and what was done.
+- **A part of the diff still refused** is named in the body under what was read, as not reviewed.
+
+A pull request that touches sensitive code is where to expect one.
 
 ## Regression or latent
 
@@ -139,4 +154,5 @@ script reads markers and threads the same way.
 
 Short, to the owner: the review's link, the verdict and counts; the exploitable claims with their
 evidence; the additional findings, for the owner to say which to file; the plausible claims and any other
-questions, as a walk thru (the shared `CLAUDE.md` rule); the comments by others left unread; and any failure, as it happened.
+questions, as a walk thru (the shared `CLAUDE.md` rule); the comments by others left unread; and any failure, as it happened:
+every refusal and model change among them, with what was done about it and what is still unread.
