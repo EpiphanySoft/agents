@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for file_review.py, with a stub `gh` on PATH in a temp directory. Nothing reaches GitHub.
-FileReviewTest covers a full review's filing and questions; PrReviewTest a pull request's passes;
-RespondTest the author's rounds.
+FileReviewTest covers a full review's filing and questions; PlanTest Planning's `plan`; PrReviewTest a
+pull request's passes; RespondTest the author's rounds.
 
     python3 skills/review/test_file_review.py        (or: python3 -m unittest discover -s skills/review)
 """
@@ -53,20 +53,72 @@ STUB_GH = textwrap.dedent("""\
             sys.exit(1)
     def value(flag):
         return args[args.index(flag) + 1]
+    fixed = ["area:core", "area:docs", "review", "question", "bug", "kind:bug", "kind:differs"]
     if args[:2] == ["label", "list"]:
-        print(json.dumps([{"name": n} for n in ["area:core", "area:docs", "review", "question",
-                                                "bug", "kind:bug", "kind:differs"]]))
+        print(json.dumps([{"name": n} for n in fixed + store.get("labels", [])]))
+    elif args[:2] == ["label", "create"]:
+        if args[2] in fixed + store.get("labels", []) + store.get("hidden_labels", []):
+            sys.stderr.write(f"label with name \\"{args[2]}\\" already exists\\n")
+            sys.exit(1)
+        creating()
+        store.setdefault("labels", []).append(args[2])
+        made()
     elif args[:2] == ["issue", "list"]:
         print(json.dumps([{k: i[k] for k in ("number", "url", "body")} for i in store["issues"]]))
     elif args[:2] == ["issue", "create"]:
         creating()
-        n = 100 + len(store["issues"]) + 1
+        n = max([100] + [i["number"] for i in store["issues"]]) + 1
         url = f"https://github.com/owner/proj/issues/{n}"
         labels = [args[i + 1] for i, a in enumerate(args) if a == "--label"]
-        store["issues"].append({"number": n, "url": url, "title": value("--title"),
-                                "body": open(value("--body-file")).read(), "labels": labels})
+        store["issues"].append({"number": n, "id": 7000 + n, "url": url, "title": value("--title"),
+                                "body": open(value("--body-file")).read(), "labels": labels,
+                                "state": "OPEN", "parent": None})
         made()
         print(url)
+    elif args[:2] == ["api", "graphql"]:
+        fields = dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-f")
+        nodes = [{"number": i["number"], "title": i["title"], "body": i["body"],
+                  "parent": {"number": i["parent"]} if i.get("parent") else None,
+                  "labels": {"nodes": [{"name": x} for x in i["labels"]]}}
+                 for i in store["issues"]
+                 if i.get("state", "OPEN") == "OPEN" and fields["label"] in i["labels"]]
+        half = len(nodes) // 2
+        for page in (nodes[:half], nodes[half:]):
+            print(json.dumps({"data": {"repository": {"issues": {
+                "nodes": page, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}))
+    elif args[:2] == ["api", "--paginate"] and re.search(r"/issues/\\d+/sub_issues\\?", args[2]):
+        p = int(re.search(r"/issues/(\\d+)/", args[2]).group(1))
+        subs = [{"number": i["number"], "title": i["title"], "body": i["body"],
+                 "state": i.get("state", "OPEN").lower(),
+                 "labels": [{"name": x} for x in i["labels"]]}
+                for i in store["issues"] if i.get("parent") == p]
+        print(json.dumps(subs[:1]))
+        print(json.dumps(subs[1:]))
+    elif args[:3] == ["api", "--method", "POST"] and re.search(r"/issues/\\d+/sub_issues$", args[3]):
+        p = int(args[3].split("/")[-2])
+        child_id = json.load(open(value("--input")))["sub_issue_id"]
+        child = next(i for i in store["issues"] if i["id"] == child_id)
+        if child.get("parent"):
+            sys.stderr.write("HTTP 422: the issue already has a parent\\n")
+            sys.exit(1)
+        creating()
+        child["parent"] = p
+        made()
+        print(json.dumps({"id": 7000 + p, "number": p,
+                          "html_url": f"https://github.com/owner/proj/issues/{p}"}))
+    elif args[0] == "api" and re.fullmatch(r"repos/owner/proj/issues/\\d+", args[1]):
+        n = int(args[1].rsplit("/", 1)[1])
+        issue = next((i for i in store["issues"] if i["number"] == n), None)
+        if n == 74:
+            issue = {"id": 7074, "number": 74, "labels": store.get("pr_labels", [])}
+        if issue is None:
+            sys.stderr.write("gh: Not Found (HTTP 404)\\n")
+            sys.exit(1)
+        if args[2:] == ["--jq", ".id"]:
+            print(issue["id"])
+        else:
+            print(json.dumps({"id": issue["id"], "number": n,
+                              "labels": [{"name": x} for x in issue["labels"]]}))
     elif args[:3] == ["api", "--method", "POST"] and re.search(r"/pulls/\\d+/reviews$", args[3]):
         creating()
         payload = json.load(open(value("--input")))
@@ -94,12 +146,14 @@ STUB_GH = textwrap.dedent("""\
         store["comments"].append(reply)
         made()
         print(json.dumps(reply))
-    elif args[:4] == ["api", "--method", "POST", "repos/owner/proj/issues/74/comments"]:
+    elif args[:3] == ["api", "--method", "POST"] and re.fullmatch(
+            r"repos/owner/proj/issues/\\d+/comments", args[3]):
         creating()
+        on = int(args[3].split("/")[-2])
         k = 1000 + len(store["issue_comments"]) + 1
-        comment = {"id": k, "body": json.load(open(value("--input")))["body"],
+        comment = {"id": k, "issue": on, "body": json.load(open(value("--input")))["body"],
                    "author_association": "OWNER",
-                   "html_url": f"https://github.com/owner/proj/pull/74#issuecomment-{k}"}
+                   "html_url": f"https://github.com/owner/proj/pull/{on}#issuecomment-{k}"}
         store["issue_comments"].append(comment)
         made()
         print(json.dumps(comment))
@@ -123,13 +177,17 @@ STUB_GH = textwrap.dedent("""\
         store["advisories"].append(adv)
         made()
         print(json.dumps(adv))
+    elif args[:2] == ["api", "--paginate"] and re.search(r"/issues/\\d+/comments\\?", args[2]):
+        on = int(re.search(r"/issues/(\\d+)/", args[2]).group(1))
+        items = [c for c in store["issue_comments"] if c.get("issue", 74) == on]
+        half = len(items) // 2
+        print(json.dumps(items[:half]))
+        print(json.dumps(items[half:]))
     elif args[:2] == ["api", "--paginate"]:
         # Two pages, as gh prints them: one JSON array after another.
-        kind = re.search(r"(security-advisories|pulls/74/reviews|pulls/74/comments|"
-                         r"issues/74/comments)\\?", args[2])
+        kind = re.search(r"(security-advisories|pulls/74/reviews|pulls/74/comments)\\?", args[2])
         items = store[{"security-advisories": "advisories", "pulls/74/reviews": "reviews",
-                       "pulls/74/comments": "comments",
-                       "issues/74/comments": "issue_comments"}[kind.group(1)]]
+                       "pulls/74/comments": "comments"}[kind.group(1)]]
         half = len(items) // 2
         print(json.dumps(items[:half]))
         print(json.dumps(items[half:]))
@@ -179,17 +237,20 @@ class FileReviewTest(unittest.TestCase):
         gh.chmod(0o755)
         (self.root / "checker.py").write_text(CHECKER)
         (self.root / "docs").mkdir()
-        self.pad = self.root / "review" / "0001"
+        self.pad = self.root / "review" / "1"
         self.pad.mkdir(parents=True)
         self.env = dict(os.environ, PATH=f"{stub_dir}{os.pathsep}{os.environ['PATH']}",
                         STUB_ROOT=str(self.root))
         self.env.pop("STUB_FAIL_AT", None)
         self.env.pop("STUB_LOSE_AT", None)
+        # The review runs on its branch, which names it: code-review-1 is CR1.
+        subprocess.run(["git", "init", "-q", "-b", "code-review-1", str(self.root)], check=True)
         self.config = {
-            "repo": "owner/proj", "name": {"prefix": "CR", "number": 1},
+            "repo": "owner/proj",
             "area_prefix": "area:", "labels": ["review"],
             "text_check": f"{sys.executable} {self.root / 'checker.py'} {{file}}",
         }
+        self.seed_steps()
         self.findings = [
             finding("U01-1", "A value on the limit is dropped."),
             finding("U01-2", "A forged token is accepted.", kind="security", severity="High",
@@ -201,6 +262,36 @@ class FileReviewTest(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def seed_steps(self):
+        """The sweep Planning made: the anchor (#41) and its steps, core (#42, with two
+        earlier findings, one closed) and docs (#43); a closed sub-issue of the anchor, another
+        sweep's anchor, and a finding with no parent."""
+        def issue(n, title, labels, state="OPEN", parent=None, body=""):
+            return {"number": n, "id": 7000 + n, "url": f"https://github.com/owner/proj/issues/{n}",
+                    "title": title, "body": body, "labels": labels, "state": state,
+                    "parent": parent}
+        self.seed = [
+            issue(41, "CR1 Code review", ["sweep:CR1"], body="<!-- review CR1 anchor -->"),
+            issue(42, "CR1.1 core", ["sweep:CR1", "area:core"], parent=41,
+                  body="<!-- review CR1 step core -->"),
+            issue(43, "CR1.2 docs", ["sweep:CR1", "area:docs"], parent=41,
+                  body="<!-- review CR1 step docs -->"),
+            issue(44, "CR1.1-2 An earlier finding.", ["sweep:CR1", "area:core"], state="CLOSED",
+                  parent=42, body="severity Low\n\n<!-- review CR0 U03-1 -->\n"),
+            issue(45, "CR1.1-1 A first finding.", ["sweep:CR1", "area:core"], parent=42,
+                  body="severity Low\n\n<!-- review CR0 U01-1 -->\n"),
+            issue(46, "H2 Another sweep", ["sweep:H2", "area:core"]),
+            issue(47, "CR1.0 Old core work", ["sweep:CR1", "area:core"], state="CLOSED", parent=41),
+            # A pull request review's finding not yet attached: never the anchor.
+            issue(48, "An orphan finding.", ["sweep:CR1", "area:core"],
+                  body="severity Low\n\n<!-- pr-review 70 P1-2 issue -->\n"),
+        ]
+        self.write_store(issues=self.seed, labels=["sweep:CR1", "sweep:H2"])
+
+    def write_store(self, **parts):
+        store = {"creates": 0, "issues": [], "advisories": [], **parts}
+        (self.root / "store.json").write_text(json.dumps(store))
 
     def write_inputs(self):
         (self.root / "docs" / "review.json").write_text(json.dumps(self.config))
@@ -230,39 +321,61 @@ class FileReviewTest(unittest.TestCase):
     def state(self):
         return json.loads((self.pad / "filing-state.json").read_text())["posted"]
 
+    def new_issues(self):
+        """The issues the script made: the seeded steps and findings are numbered below 100."""
+        return [i for i in self.store()["issues"] if i["number"] > 100]
+
+    def edit_store(self, change):
+        store = self.store()
+        change(store)
+        (self.root / "store.json").write_text(json.dumps(store))
+
+    def seeded(self, n):
+        return next(i for i in self.seed if i["number"] == n)
+
+    def dry_run_text(self):
+        return (self.pad / "filing-dry-run.md").read_text()
+
     # ---- dry run ----
 
     def test_dry_run_writes_every_item_and_posts_nothing(self):
         done = self.run_script("dry-run")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(self.posting_calls(), [])
-        text = (self.pad / "filing-dry-run.md").read_text()
+        text = self.dry_run_text()
         self.assertIn("plan sha256: ", text)
-        for f in self.findings:
-            self.assertIn(f"- title: {f['title']}", text)
+        self.assertIn("records sha256: ", text)
+        self.assertIn("Sweep: `sweep:CR1`; its anchor: #41.", text)
+        self.assertIn("- title: CR1.1-3 A value on the limit is dropped.\n", text)
+        self.assertIn("- title: A forged token is accepted.\n", text)
+        self.assertIn("- title: CR1.2-1 Two documents give different timeouts.\n", text)
         self.assertIn("## 1. U01-1: public issue", text)
         self.assertIn("## 2. U01-2: draft security advisory, private", text)
-        self.assertIn("- labels: review, area:docs, question", text)
-        self.assertIn("- labels: review, area:core", text)
-        self.assertEqual(text.count("- parent: none"), 4)
-        self.assertIn("- title: CR1: summary", text)
+        self.assertIn("- labels: review, sweep:CR1, area:docs, question", text)
+        self.assertIn("- labels: review, sweep:CR1, area:core\n", text)
+        self.assertIn("- parent: #42 CR1.1 core\n", text)
+        self.assertIn("- parent: #43 CR1.2 docs\n", text)
+        self.assertIn("- parent: none (an advisory can't be a sub-issue)\n", text)
+        self.assertIn("## 4. summary: a comment on #41: the summary, posted last", text)
+        self.assertIn("then the summary, as a comment on the anchor #41.", text)
         self.assertIn("#<U01-1>", text)
+        self.assertNotIn("(CR1-", text)
         self.assertIn("Text check: passed", text)
         self.assertFalse((self.pad / "filing-state.json").exists())
 
     def test_kind_labels_only_with_a_kind_prefix(self):
         self.run_script("dry-run")
-        self.assertNotIn("kind:", (self.pad / "filing-dry-run.md").read_text())
+        self.assertNotIn("kind:", self.dry_run_text())
         self.config["kind_prefix"] = "kind:"
         self.write_inputs()
         self.assertEqual(self.run_script("dry-run").returncode, 0)
-        text = (self.pad / "filing-dry-run.md").read_text()
-        self.assertIn("- labels: review, area:core, kind:bug\n", text)
-        self.assertIn("- labels: review, area:docs, kind:differs, question\n", text)
+        text = self.dry_run_text()
+        self.assertIn("- labels: review, sweep:CR1, area:core, kind:bug\n", text)
+        self.assertIn("- labels: review, sweep:CR1, area:docs, kind:differs, question\n", text)
 
     def test_advisory_follows_the_mark_unless_set(self):
         self.run_script("dry-run")
-        text = (self.pad / "filing-dry-run.md").read_text()
+        text = self.dry_run_text()
         self.assertIn("## 2. U01-2: draft security advisory, private, severity high", text)
         self.assertIn("- exploitable if public: yes\n", text)
         self.assertEqual(text.count("- exploitable if public: no\n"), 2)
@@ -271,22 +384,23 @@ class FileReviewTest(unittest.TestCase):
         self.findings[0]["advisory"] = True
         self.write_inputs()
         self.run_script("dry-run")
-        text = (self.pad / "filing-dry-run.md").read_text()
+        text = self.dry_run_text()
         self.assertIn("## 1. U01-1: draft security advisory", text)
         self.assertIn("## 2. U01-2: public issue", text)
         self.assertIn("filed as a public issue anyway (`advisory: false`)", text)
         self.assertIn("filed as an advisory anyway (`advisory: true`)", text)
+        # The advisory has a plain title and no parent; the issue now takes the area's number.
+        self.assertIn("- title: A value on the limit is dropped.\n", text)
+        self.assertIn("- title: CR1.1-3 A forged token is accepted.\n", text)
 
     def test_dry_run_flags_a_mark_lost_since_the_review(self):
         (self.pad / "exploitable.json").write_text(json.dumps(["U01-2", "U01-1"]))
         self.assertEqual(self.run_script("dry-run").returncode, 0)
-        text = (self.pad / "filing-dry-run.md").read_text()
-        self.assertIn("Check the marks: U01-1 flagged in `exploitable.json`", text)
+        self.assertIn("Check the marks: U01-1 flagged in `exploitable.json`", self.dry_run_text())
 
     def test_body_starts_with_severity_and_holds_the_finding(self):
         self.run_script("dry-run")
-        text = (self.pad / "filing-dry-run.md").read_text()
-        body = text.split("## 1. U01-1")[1].split("```markdown\n")[1]
+        body = self.dry_run_text().split("## 1. U01-1")[1].split("```markdown\n")[1]
         self.assertTrue(body.startswith("severity Med\n"))
         for part in ("**Kind:** bug", "**Requirements:** R1.2", "`src/core.py:12`",
                      "if n < limit:", "**What goes wrong**", "**How it was run**", "**Remedy**"):
@@ -297,32 +411,172 @@ class FileReviewTest(unittest.TestCase):
         self.write_inputs()
         done = self.run_script("dry-run")
         self.assertEqual(done.returncode, 1)
-        self.assertIn("Text check: FAILED for U01-1", (self.pad / "filing-dry-run.md").read_text())
+        self.assertIn("Text check: FAILED for U01-1", self.dry_run_text())
+        self.assertEqual(self.posting_calls(), [])
+
+    # ---- the parent search and the titles ----
+
+    def no_parent(self, needle):
+        """The dry run fails naming the area and the issues; post refuses; nothing is posted."""
+        done = self.run_script("dry-run")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn(needle, done.stderr)
+        text = self.dry_run_text()
+        self.assertIn("Parents: FAILED, so `post` refuses this plan:", text)
+        self.assertIn(f"- parent: FAILED: {needle}", text)
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no parent for", done.stderr)
+        self.assertEqual(self.posting_calls(), [])
+
+    def test_the_parent_is_the_one_open_step_of_the_area_under_the_anchor(self):
+        # #42 is found among the issues labelled area:core: #46 is another sweep's, #47 is closed,
+        # #44 and #45 are a step's sub-issues, #48 is no sub-issue of the anchor.
+        self.run_script("dry-run")
+        self.assertIn("- parent: #42 CR1.1 core\n", self.dry_run_text())
+        # A finding under the anchor that carries the area label is no step.
+        self.edit_store(lambda s: next(i for i in s["issues"] if i["number"] == 47).update(
+            state="OPEN", body="<!-- review CR1 U09-9 -->"))
+        self.run_script("dry-run")
+        self.assertIn("- parent: #42 CR1.1 core\n", self.dry_run_text())
+
+    def test_no_step_for_an_area_fails_the_dry_run(self):
+        self.edit_store(lambda s: s["issues"].remove(next(i for i in s["issues"]
+                                                          if i["number"] == 43)))
+        self.no_parent("area docs: no open sub-issue of the anchor #41 is labelled area:docs")
+
+    def test_two_steps_for_an_area_fail_the_dry_run_naming_them(self):
+        self.edit_store(lambda s: s["issues"].append(
+            dict(self.seeded(42), number=49, id=7049, title="CR1.3 core again")))
+        self.no_parent("area core: 2 open sub-issues of the anchor #41 are labelled area:core "
+                       "(#42, #49)")
+
+    def test_the_anchor_is_the_one_open_issue_of_the_sweep_with_no_parent(self):
+        # #48 loses its finding's marker: two issues could be the anchor, and nothing is filed.
+        self.edit_store(lambda s: next(i for i in s["issues"] if i["number"] == 48)
+                        .update(body="Plain."))
+        self.refused("the sweep sweep:CR1 has 2 open issues with no parent and no finding's "
+                     "marker (#41, #48)")
+        # No anchor at all: the sweep wasn't planned.
+        self.seed_steps()
+        self.edit_store(lambda s: next(i for i in s["issues"] if i["number"] == 41)
+                        .update(state="CLOSED"))
+        self.refused("has 0 open issues with no parent")
+
+    def test_numbers_follow_the_highest_of_the_parents_sub_issues(self):
+        # #44 (CR1.1-2) is closed and #45 is CR1.1-1: the next is 3, then 4, in the plan's order.
+        self.findings.append(finding("U02-1", "A second core finding."))
+        self.write_inputs()
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        text = self.dry_run_text()
+        self.assertIn("- title: CR1.1-3 A value on the limit is dropped.\n", text)
+        self.assertIn("- title: CR1.1-4 A second core finding.\n", text)
+
+    def test_a_parent_title_without_a_leading_id_gives_the_plain_title(self):
+        self.edit_store(lambda s: next(i for i in s["issues"] if i["number"] == 43)
+                        .update(title="Documents"))
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        text = self.dry_run_text()
+        self.assertIn("- title: Two documents give different timeouts.\n", text)
+        self.assertIn("- parent: #43 Documents\n", text)
+        # The anchor's id is the review's name: CR1 of "CR1 Code review".
+        self.assertIn("- title: CR1.1-3 A value on the limit is dropped.\n", text)
+
+    def test_only_the_sweeps_own_name_is_a_step_id(self):
+        def titled(core, docs):
+            self.seed_steps()
+            self.edit_store(lambda s: [i.update(title={42: core, 43: docs}[i["number"]])
+                                       for i in s["issues"] if i["number"] in (42, 43)])
+            self.assertEqual(self.run_script("dry-run").returncode, 0)
+            return self.dry_run_text()
+        # A step's id: the name and ".<n>".
+        text = titled("CR1.3 core", "CR1.12 docs")
+        self.assertIn("- title: CR1.3-1 A value on the limit is dropped.\n", text)
+        self.assertIn("- title: CR1.12-1 Two documents give different timeouts.\n", text)
+        # Not an id: a word with a digit, another sweep's id, the name run on.
+        for core, docs in (("Fix2 things", "CR2.3 docs"), ("CR1x core", "CR1.2.1 docs"),
+                           ("CR12 core", "CR1.a docs")):
+            text = titled(core, docs)
+            self.assertIn("- title: A value on the limit is dropped.\n", text, core)
+            self.assertIn("- title: Two documents give different timeouts.\n", text, docs)
+        # The anchor's id: the name itself.
+        self.seed_steps()
+        self.findings[2]["area"] = None
+        self.write_inputs()
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        self.assertIn("- title: CR1-1 Two documents give different timeouts.\n",
+                      self.dry_run_text())
+
+    def test_a_finding_no_area_owns_goes_under_the_anchor(self):
+        self.findings[2]["area"] = None
+        self.write_inputs()
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        text = self.dry_run_text()
+        self.assertIn("- title: CR1-1 Two documents give different timeouts.\n", text)
+        self.assertIn("- parent: #41 CR1 Code review\n", text)
+        self.assertIn("- labels: review, sweep:CR1, question\n", text)
+
+    def test_the_review_is_named_by_its_branch_or_by_sweep(self):
+        # Off its branch, the review must be named.
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD",
+                        "refs/heads/master"], check=True)
+        self.refused("which review? Run on its branch code-review-<N>, or name it: --sweep CR<N>")
+        done = self.run_script("dry-run", "--sweep", "CR1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("# CR1 filing: dry run", self.dry_run_text())
+        for bad in ("XY1", "CR01", "CR"):
+            done = self.run_script("dry-run", "--sweep", bad)
+            self.assertEqual(done.returncode, 2)
+            self.assertIn(f"--sweep {bad}: not CR<N>", done.stderr)
+        # A sweep that has no anchor isn't planned: refused before anything is read further.
+        done = self.run_script("dry-run", "--sweep", "CR2", "--pad", "review/1")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("the sweep sweep:CR2 has 0 open issues with no parent", done.stderr)
+        # The prefix comes from the config.
+        self.config["prefix"] = "RV"
+        self.write_inputs()
+        done = self.run_script("dry-run", "--sweep", "CR1")
+        self.assertIn("--sweep CR1: not RV<N>", done.stderr)
         self.assertEqual(self.posting_calls(), [])
 
     # ---- post ----
 
-    def test_post_files_issues_the_advisory_and_the_summary(self):
+    def test_post_files_attaches_and_comments_the_summary(self):
         self.assertEqual(self.run_script("dry-run").returncode, 0)
         done = self.run_script("post")
         self.assertEqual(done.returncode, 0, done.stderr)
         calls = self.posting_calls()
-        self.assertEqual([c[0] for c in calls], ["issue", "api", "issue", "issue"])
-        self.assertEqual(calls[1][:4], ["api", "--method", "POST",
-                                        "repos/owner/proj/security-advisories"])
-        self.assertIn("question", calls[2])
+        self.assertEqual([c[0] if c[0] == "issue" else c[3] for c in calls],
+                         ["issue", "repos/owner/proj/issues/42/sub_issues",
+                          "repos/owner/proj/security-advisories",
+                          "issue", "repos/owner/proj/issues/43/sub_issues",
+                          "repos/owner/proj/issues/41/comments"])
+        self.assertIn("question", calls[3])
+        issues = {i["number"]: i for i in self.new_issues()}
+        self.assertEqual(sorted(issues), [101, 102])
+        self.assertEqual((issues[101]["title"], issues[101]["parent"]),
+                         ("CR1.1-3 A value on the limit is dropped.", 42))
+        self.assertEqual((issues[102]["title"], issues[102]["parent"]),
+                         ("CR1.2-1 Two documents give different timeouts.", 43))
+        self.assertEqual(issues[101]["labels"], ["review", "sweep:CR1", "area:core"])
         state = self.state()
         self.assertEqual(set(state), {"U01-1", "U01-2", "D1-1", "summary"})
         self.assertEqual(state["U01-2"]["type"], "advisory")
-        summary_call = calls[3]
-        self.assertEqual(summary_call[summary_call.index("--title") + 1], "CR1: summary")
+        self.assertNotIn("attached", state["U01-2"])
+        self.assertEqual((state["U01-1"]["attached"], state["D1-1"]["attached"]), (42, 43))
+        self.assertEqual(state["summary"]["type"], "comment")
+        self.assertEqual(len(self.store()["advisories"]), 1)
 
     def test_summary_links_findings_and_keeps_advisories_private(self):
         self.run_script("dry-run")
         self.assertEqual(self.run_script("post").returncode, 0)
-        summary = self.store()["issues"][-1]["body"]
-        self.assertIn("- #101 severity Med, bug, area core: A value on the limit is dropped.", summary)
-        self.assertIn("- #102 severity Med, differs, area docs:", summary)
+        [comment] = self.store()["issue_comments"]
+        self.assertEqual(comment["issue"], 41)
+        summary = comment["body"]
+        self.assertIn("- #101 severity Med, bug, area core: CR1.1-3 A value on the limit is "
+                      "dropped.", summary)
+        self.assertIn("- #102 severity Med, differs, area docs: CR1.2-1", summary)
+        self.assertIn("**Sweep:** `sweep:CR1`", summary)
         self.assertNotIn("forged", summary)
         self.assertIn("1 more finding is filed as a draft security advisory, private", summary)
         self.assertNotIn("#<", summary)
@@ -331,14 +585,16 @@ class FileReviewTest(unittest.TestCase):
         self.run_script("dry-run")
         self.run_script("post")
         store = self.store()
-        bodies = [i["body"] for i in store["issues"]] + [a["description"] for a in store["advisories"]]
+        bodies = [i["body"] for i in store["issues"]] + \
+            [a["description"] for a in store["advisories"]] + \
+            [c["body"] for c in store["issue_comments"]]
         for item_id in ("U01-1", "D1-1", "summary", "U01-2"):
             self.assertEqual(sum(b.endswith(f"<!-- review CR1 {item_id} -->\n") for b in bodies), 1)
 
     def test_rerun_after_a_create_that_was_not_recorded(self):
         self.run_script("dry-run")
-        # The second create (the advisory) is made, then gh fails before the script records it.
-        done = self.run_script("post", STUB_LOSE_AT="2")
+        # Creates: 1 U01-1, 2 its attach, 3 the advisory: made, then gh fails before it is recorded.
+        done = self.run_script("post", STUB_LOSE_AT="3")
         self.assertEqual(done.returncode, 1)
         self.assertEqual(set(self.state()), {"U01-1"})
         self.assertEqual(len(self.store()["advisories"]), 1)
@@ -347,18 +603,70 @@ class FileReviewTest(unittest.TestCase):
         self.assertIn("U01-2: found already posted", done.stdout)
         store = self.store()
         self.assertEqual(len(store["advisories"]), 1)
-        self.assertEqual(len(store["issues"]), 3)
+        self.assertEqual(len(self.new_issues()), 2)
         self.assertEqual(self.state()["U01-2"]["ghsa_id"], "GHSA-stub-1")
         self.assertTrue(self.state()["U01-2"]["found"])
 
-    def test_lost_issue_create_is_found_and_linked(self):
+    def test_lost_issue_create_is_found_attached_and_linked(self):
         self.run_script("dry-run")
         self.assertEqual(self.run_script("post", STUB_LOSE_AT="1").returncode, 1)
-        self.assertNotIn("U01-1", self.state() if (self.pad / "filing-state.json").exists() else {})
+        self.assertFalse((self.pad / "filing-state.json").exists())
+        self.assertEqual(self.new_issues()[0]["parent"], None)
         self.assertEqual(self.run_script("post").returncode, 0)
-        store = self.store()
-        self.assertEqual([i["number"] for i in store["issues"]], [101, 102, 103])
-        self.assertIn("- #101 severity Med", store["issues"][-1]["body"])
+        issues = self.new_issues()
+        self.assertEqual([(i["number"], i["parent"]) for i in issues], [(101, 42), (102, 43)])
+        self.assertEqual(self.state()["U01-1"]["attached"], 42)
+        self.assertIn("- #101 severity Med", self.store()["issue_comments"][0]["body"])
+
+    def test_a_stop_between_filing_and_attaching_reruns_only_the_attach(self):
+        self.run_script("dry-run")
+        # Creates: 1 U01-1, 2 its attach, which fails before it is made.
+        done = self.run_script("post", STUB_FAIL_AT="2")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(set(self.state()), {"U01-1"})
+        self.assertNotIn("attached", self.state()["U01-1"])
+        self.assertEqual(self.new_issues()[0]["parent"], None)
+        before = len(self.posting_calls())
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        after = self.posting_calls()[before:]
+        self.assertEqual(after[0][3], "repos/owner/proj/issues/42/sub_issues")
+        created = [c for c in self.posting_calls() if c[:2] == ["issue", "create"]]
+        titles = [c[c.index("--title") + 1] for c in created]
+        self.assertEqual(titles.count("CR1.1-3 A value on the limit is dropped."), 1)
+        self.assertEqual(self.new_issues()[0]["parent"], 42)
+        self.assertEqual(self.state()["U01-1"]["attached"], 42)
+
+    def test_an_attach_made_but_not_recorded_is_not_made_again(self):
+        self.run_script("dry-run")
+        self.assertEqual(self.run_script("post", STUB_LOSE_AT="2").returncode, 1)
+        self.assertEqual(self.new_issues()[0]["parent"], 42)
+        self.assertNotIn("attached", self.state()["U01-1"])
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("#101: a sub-issue of #42 already; recorded", done.stdout)
+        attaches = [c for c in self.posting_calls() if c[3:4] == ["repos/owner/proj/issues/42/sub_issues"]]
+        self.assertEqual(len(attaches), 1)
+        self.assertEqual(self.state()["U01-1"]["attached"], 42)
+
+    def test_the_summary_comment_is_posted_once_across_reruns(self):
+        # Someone outside the project plants the summary's marker on the step: it is never read.
+        self.edit_store(lambda s: s.setdefault("issue_comments", []).append(
+            {"id": 999, "issue": 41, "body": "<!-- review CR1 summary -->",
+             "author_association": "NONE", "html_url": "x"}))
+        self.run_script("dry-run")
+        # Creates: 1-2 U01-1, 3 the advisory, 4-5 D1-1, 6 the summary: made, not recorded.
+        self.assertEqual(self.run_script("post", STUB_LOSE_AT="6").returncode, 1)
+        self.assertNotIn("summary", self.state())
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("summary: found already posted", done.stdout)
+        ours = [c for c in self.store()["issue_comments"] if c["id"] != 999]
+        self.assertEqual(len(ours), 1)
+        self.assertTrue(self.state()["summary"]["found"])
+        before = len(self.posting_calls())
+        self.assertEqual(self.run_script("post").returncode, 0)
+        self.assertEqual(len(self.posting_calls()), before)
 
     def test_post_needs_a_dry_run_that_matches(self):
         done = self.run_script("post")
@@ -372,9 +680,28 @@ class FileReviewTest(unittest.TestCase):
         self.assertIn("run dry-run again", done.stderr)
         self.assertEqual(self.posting_calls(), [])
 
+    def test_post_refuses_when_a_parent_or_a_number_changed_since_the_dry_run(self):
+        def new_parent(store):
+            core = next(i for i in store["issues"] if i["number"] == 42)
+            core["labels"] = ["sweep:CR1"]
+            store["issues"].append(dict(core, number=49, id=7049, title="CR1.9 Core",
+                                        labels=["sweep:CR1", "area:core"]))
+
+        def new_number(store):
+            store["issues"].append(dict(self.seeded(45), number=50, id=7050,
+                                        title="CR1.1-7 Filed by hand.", body=""))
+        for change in (new_parent, new_number):
+            self.seed_steps()
+            self.assertEqual(self.run_script("dry-run").returncode, 0)
+            self.edit_store(change)
+            done = self.run_script("post")
+            self.assertEqual(done.returncode, 2, change)
+            self.assertIn("a parent or a number differs", done.stderr)
+            self.assertEqual(self.posting_calls(), [])
+
     def test_rerun_after_a_partial_post_skips_what_was_posted(self):
         self.run_script("dry-run")
-        done = self.run_script("post", STUB_FAIL_AT="2")
+        done = self.run_script("post", STUB_FAIL_AT="3")
         self.assertEqual(done.returncode, 1)
         self.assertIn("stub failure", done.stderr)
         self.assertEqual(set(self.state()), {"U01-1"})
@@ -383,8 +710,8 @@ class FileReviewTest(unittest.TestCase):
         self.assertEqual(set(self.state()), {"U01-1", "U01-2", "D1-1", "summary"})
         created = [c for c in self.posting_calls() if c[:2] == ["issue", "create"]]
         titles = [c[c.index("--title") + 1] for c in created]
-        self.assertEqual(titles.count("A value on the limit is dropped."), 1)
-        # A third run posts nothing new.
+        self.assertEqual(titles.count("CR1.1-3 A value on the limit is dropped."), 1)
+        # A third run posts nothing new, and its numbers still match the dry run's.
         before = len(self.posting_calls())
         self.assertEqual(self.run_script("post").returncode, 0)
         self.assertEqual(len(self.posting_calls()), before)
@@ -398,15 +725,18 @@ class FileReviewTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("text check failed for D1-1", done.stderr)
         self.assertEqual(set(self.state()), {"U01-1", "U01-2"})
-        self.assertEqual(len(self.posting_calls()), 2)
+        self.assertEqual(len(self.posting_calls()), 3)
 
     def test_never_closes_or_edits(self):
         self.run_script("dry-run")
         self.run_script("post")
+        allowed = re.compile(r"^repos/owner/proj/(security-advisories|issues/4[23]/sub_issues|"
+                             r"issues/41/comments)$")
         for call in self.calls():
             self.assertNotIn(call[:2], (["issue", "close"], ["issue", "edit"]))
             if call[:2] == ["api", "--method"]:
-                self.assertEqual(call[2:4], ["POST", "repos/owner/proj/security-advisories"])
+                self.assertEqual(call[2], "POST")
+                self.assertRegex(call[3], allowed)
 
     # ---- question ----
 
@@ -416,6 +746,7 @@ class FileReviewTest(unittest.TestCase):
                     {"option": "Drop it", "means": "the limit is exclusive, as the code does"}],
         "recommendation": "Keep it: R1.2 says up to and including.",
         "claim": "U01-1",
+        "area": "core",
     }
 
     def ask(self, question=None, **env):
@@ -427,24 +758,38 @@ class FileReviewTest(unittest.TestCase):
         path = self.pad / "questions.md"
         return path.read_text() if path.exists() else ""
 
-    def test_question_is_filed_as_a_walk_thru_item(self):
+    def test_question_is_filed_under_its_areas_step_as_a_walk_thru_item(self):
         done = self.ask()
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("filed: https://github.com/owner/proj/issues/101", done.stdout)
-        issue = self.store()["issues"][0]
-        self.assertEqual(issue["title"], "CR1 question: Should a value on the limit be kept?")
-        self.assertEqual(issue["labels"], ["review", "question"])
+        issue = self.new_issues()[0]
+        self.assertEqual(issue["title"],
+                         "CR1.1-3 Question: Should a value on the limit be kept?")
+        self.assertEqual(issue["labels"], ["review", "question", "sweep:CR1", "area:core"])
+        self.assertEqual(issue["parent"], 42)
         for part in ("**Question:** Should", "1. **Keep it**: the limit is inclusive",
                      "2. **Drop it**:", "**Recommendation:** Keep it", "**Claim:** U01-1"):
             self.assertIn(part, issue["body"])
         self.assertEqual(self.questions_md(), "")
 
+    def test_a_question_about_the_review_goes_under_its_own_step(self):
+        question = {k: v for k, v in self.QUESTION.items() if k != "claim"}
+        done = self.ask(dict(question, area=None))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        issue = self.new_issues()[0]
+        self.assertEqual(issue["title"], "CR1-1 Question: Should a value on the limit be kept?")
+        self.assertEqual(issue["labels"], ["review", "question", "sweep:CR1"])
+        self.assertEqual(issue["parent"], 41)
+
     def test_question_on_an_exploitable_claim_stays_private(self):
         (self.pad / "exploitable.json").write_text(json.dumps(["U01-1"]))
         done = self.ask()
         self.assertEqual(done.returncode, 0, done.stderr)
-        issue = self.store()["issues"][0]
-        self.assertEqual(issue["title"], "CR1 question: a private question is waiting")
+        issue = self.new_issues()[0]
+        self.assertEqual(issue["title"], "CR1-1 Question: a private question is waiting")
+        # Its area would say where to look: the notice goes under the anchor.
+        self.assertEqual(issue["labels"], ["review", "question", "sweep:CR1"])
+        self.assertEqual(issue["parent"], 41)
         for text in (issue["title"], issue["body"]):
             self.assertNotIn("limit", text)
             self.assertNotIn("U01-1", text)
@@ -455,11 +800,33 @@ class FileReviewTest(unittest.TestCase):
     def test_question_that_cannot_be_filed_is_kept(self):
         done = self.ask(STUB_FAIL_AT="1")
         self.assertEqual(done.returncode, 1)
-        self.assertEqual(self.store()["issues"], [])
+        self.assertEqual(self.new_issues(), [])
         kept = self.questions_md()
         self.assertIn("it could not be filed", kept)
         self.assertIn("stub failure", kept)
         self.assertIn("**Question:** Should a value on the limit be kept?", kept)
+
+    def test_question_with_no_parent_is_kept_not_filed(self):
+        self.edit_store(lambda s: s["issues"].remove(next(i for i in s["issues"]
+                                                          if i["number"] == 42)))
+        done = self.ask()
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.posting_calls(), [])
+        self.assertIn("no parent for the question's area core", self.questions_md())
+
+    def test_question_filed_but_not_attached_is_kept_and_attached_on_a_rerun(self):
+        done = self.ask(STUB_FAIL_AT="2")
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.new_issues()[0]["parent"], None)
+        self.assertIn("filed as https://github.com/owner/proj/issues/101, but not made a "
+                      "sub-issue of #42; run question again to attach it", self.questions_md())
+        done = self.ask()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("found already filed as https://github.com/owner/proj/issues/101", done.stdout)
+        [issue] = self.new_issues()
+        self.assertEqual(issue["parent"], 42)
+        self.assertTrue(issue["body"].endswith(" -->\n"))
+        self.assertIn("<!-- review CR1 question-", issue["body"])
 
     def test_question_failing_the_text_check_is_kept_not_filed(self):
         question = dict(self.QUESTION, recommendation="Keep it, says FORBIDDEN.")
@@ -483,6 +850,13 @@ class FileReviewTest(unittest.TestCase):
         done = self.ask(question)
         self.assertEqual(done.returncode, 2)
         self.assertIn("question.options: needs at least 2 items", done.stderr)
+        done = self.ask({k: v for k, v in self.QUESTION.items() if k != "area"})
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("question.area: missing", done.stderr)
+        done = self.ask(dict(self.QUESTION, area="nowhere"))
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("question.area: 'nowhere' is not one of the project's areas",
+                      self.questions_md())
         self.assertEqual(self.posting_calls(), [])
 
     # ---- refusals ----
@@ -499,9 +873,14 @@ class FileReviewTest(unittest.TestCase):
         self.refused("config.repo: missing")
 
     def test_bad_config_wrong_type(self):
-        self.config["name"]["number"] = "1"
+        self.config["prefix"] = 1
         self.write_inputs()
-        self.refused("config.name.number: must be integer")
+        self.refused("config.prefix: must be string")
+
+    def test_bad_config_old_name_field(self):
+        self.config["name"] = {"prefix": "CR", "number": 1}
+        self.write_inputs()
+        self.refused("config.name: not a known field")
 
     def test_bad_config_unknown_field(self):
         self.config["lables"] = ["x"]
@@ -536,7 +915,194 @@ class FileReviewTest(unittest.TestCase):
         self.config["areas_command"] = f"{sys.executable} -c \"print('core'); print('docs')\""
         self.write_inputs()
         self.assertEqual(self.run_script("dry-run").returncode, 0)
+        self.assertNotIn(["label", "list"], [c[:2] for c in self.calls()])
+
+
+class PlanTest(unittest.TestCase):
+    """Planning's `plan`: its prerequisites, the sweep's label, its anchor and one step per area
+    under it."""
+    tearDown = FileReviewTest.tearDown
+    run_script = FileReviewTest.run_script
+    calls = FileReviewTest.calls
+    store = FileReviewTest.store
+    write_inputs = FileReviewTest.write_inputs
+    seed_steps = FileReviewTest.seed_steps
+    write_store = FileReviewTest.write_store
+    edit_store = FileReviewTest.edit_store
+    posting_calls = FileReviewTest.posting_calls
+    dry_run_text = FileReviewTest.dry_run_text
+
+    def setUp(self):
+        """The shared setUp, on the target branch where the method has landed, with no review
+        planned yet."""
+        FileReviewTest.setUp(self)
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD", "refs/heads/master"],
+                       check=True)
+        (self.root / "docs" / "REVIEW.md").write_text("# Code review\n")
+        self.commit_fixture("docs/REVIEW.md", "docs/review.json")
+        self.write_store(issues=[], labels=[])
+
+    def commit_fixture(self, *paths):
+        """Make HEAD of the temp repository a commit of paths, with git's plumbing alone: a test
+        fixture's object, never signed and never pushed."""
+        git = ["git", "-C", str(self.root)]
+        env = dict(os.environ, GIT_INDEX_FILE=str(self.root / ".git" / "fixture-index"))
+        subprocess.run(git + ["read-tree", "--empty"], env=env, check=True)
+        if paths:
+            subprocess.run(git + ["update-index", "--add", *paths], env=env, check=True)
+        tree = subprocess.run(git + ["write-tree"], env=env, check=True, capture_output=True,
+                              text=True).stdout.strip()
+        who = "Fixture <fixture@example.invalid> 0 +0000"
+        text = f"tree {tree}\nauthor {who}\ncommitter {who}\n\nThe fixture.\n"
+        commit = subprocess.run(git + ["hash-object", "-t", "commit", "-w", "--stdin"], input=text,
+                                check=True, capture_output=True, text=True).stdout.strip()
+        subprocess.run(git + ["update-ref", "HEAD", commit], check=True)
+
+    def plan(self, *args, **env):
+        return self.run_script("plan", *args, **env)
+
+    def made(self):
+        return [c for c in self.calls() if c[:2] in (["issue", "create"], ["label", "create"])
+                or c[:3] == ["api", "--method", "POST"]]
+
+    def test_dry_run_says_what_it_would_make_and_makes_nothing(self):
+        done = self.plan("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.made(), [])
+        for line in ("CR1: the label sweep:CR1 would be made",
+                     "- CR1 Code review [review, sweep:CR1]: would be made",
+                     "- CR1.1 core [review, sweep:CR1, area:core]: would be made",
+                     "- CR1.2 docs [review, sweep:CR1, area:docs]: would be made",
+                     "the review's branch: code-review-1, its work pad review/1/"):
+            self.assertIn(line, done.stdout)
+
+    def test_plan_makes_the_label_the_anchor_and_its_steps(self):
+        done = self.plan()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("CR1: planned, the anchor #101", done.stdout)
+        self.assertEqual([c[:3] for c in self.made()][0], ["label", "create", "sweep:CR1"])
+        issues = self.store()["issues"]
+        self.assertEqual([(i["number"], i["title"], i["labels"], i["parent"]) for i in issues],
+                         [(101, "CR1 Code review", ["review", "sweep:CR1"], None),
+                          (102, "CR1.1 core", ["review", "sweep:CR1", "area:core"], 101),
+                          (103, "CR1.2 docs", ["review", "sweep:CR1", "area:docs"], 101)])
+        self.assertTrue(issues[0]["body"].endswith("<!-- review CR1 anchor -->\n"))
+        self.assertIn("- CR1.1 core\n- CR1.2 docs\n", issues[0]["body"])
+        self.assertTrue(issues[1]["body"].endswith("<!-- review CR1 step core -->\n"))
+        # The review then files under it, named by its branch, made from the target's commit.
+        subprocess.run(["git", "-C", str(self.root), "branch", "code-review-1"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD",
+                        "refs/heads/code-review-1"], check=True)
+        done = self.run_script("dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        text = self.dry_run_text()
+        self.assertIn("- title: CR1.1-1 A value on the limit is dropped.\n", text)
+        self.assertIn("- parent: #103 CR1.2 docs\n", text)
+        self.assertIn("its anchor: #101", text)
+        # Planned again, it makes nothing: it is done.
+        before = len(self.made())
+        done = self.plan("--sweep", "CR1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(len(self.made()), before)
+
+    def test_the_next_sweep_follows_the_highest_label(self):
+        self.edit_store(lambda s: s.update(labels=["sweep:CR1", "sweep:CR3", "sweep:H9"], issues=[
+            {"number": 60, "id": 7060, "url": "u60", "title": "CR3 Code review", "state": "CLOSED",
+             "labels": ["sweep:CR3"], "parent": None, "body": "<!-- review CR3 anchor -->"}]))
+        done = self.plan()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.made()[0][:3], ["label", "create", "sweep:CR4"])
+        self.assertEqual(self.store()["issues"][1]["title"], "CR4 Code review")
+
+    def test_a_label_that_exists_already_stops_the_plan(self):
+        # Made by someone else since the list was read: creating it fails, and nothing more is made.
+        self.edit_store(lambda s: s.update(hidden_labels=["sweep:CR1"]))
+        done = self.plan()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("already exists", done.stderr)
+        self.assertEqual(self.store()["issues"], [])
+
+    def test_a_plan_that_stopped_after_its_label_is_finished(self):
+        # Creates: 1 the label, 2 the anchor, which fails.
+        self.assertEqual(self.plan(STUB_FAIL_AT="2").returncode, 1)
+        self.assertEqual(self.store()["labels"], ["sweep:CR1"])
+        done = self.plan()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("sweep:CR1 has no anchor yet: finishing its plan", done.stdout)
+        self.assertEqual([i["title"] for i in self.store()["issues"]],
+                         ["CR1 Code review", "CR1.1 core", "CR1.2 docs"])
+        self.assertEqual(sum(c[:2] == ["label", "create"] for c in self.made()), 1)
+
+    def test_a_plan_that_stopped_part_way_resumes_from_its_markers(self):
+        # Creates: 1 the label, 2 the anchor, 3 the core step, 4 its attach, which fails.
+        done = self.plan(STUB_FAIL_AT="4")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("run plan --sweep CR1 to finish it", done.stderr)
+        done = self.plan("--sweep", "CR1", "--dry-run")
+        self.assertIn("- CR1.1 core [review, sweep:CR1, area:core]: #102, made earlier, not yet a "
+                      "sub-issue of the anchor", done.stdout)
+        self.assertIn("- CR1.2 docs [review, sweep:CR1, area:docs]: would be made", done.stdout)
+        before = len(self.made())
+        done = self.plan("--sweep", "CR1")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        after = [c[0] if c[0] != "api" else c[3] for c in self.made()[before:]]
+        self.assertEqual(after, ["repos/owner/proj/issues/101/sub_issues", "issue",
+                                 "repos/owner/proj/issues/101/sub_issues"])
+        self.assertEqual([(i["title"], i["parent"]) for i in self.store()["issues"]],
+                         [("CR1 Code review", None), ("CR1.1 core", 101), ("CR1.2 docs", 101)])
+
+    def test_the_steps_follow_the_areas_command_order(self):
+        self.config["areas_command"] = f"{sys.executable} -c \"print('docs'); print('core')\""
+        self.write_inputs()
+        self.assertEqual(self.plan().returncode, 0)
+        self.assertEqual([i["title"] for i in self.store()["issues"]],
+                         ["CR1 Code review", "CR1.1 docs", "CR1.2 core"])
+
+    def test_a_failing_text_check_makes_nothing(self):
+        self.config["areas_command"] = f"{sys.executable} -c \"print('FORBIDDEN')\""
+        self.write_inputs()
+        done = self.plan("--dry-run")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("text check failed for anchor", done.stderr)
+        done = self.plan()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("nothing made", done.stderr)
+        self.assertEqual(self.made(), [])
+
+    def test_the_prerequisites_are_checked_first(self):
+        # Each file on disk but not in HEAD, then no commit at all: refused, nothing read or made.
+        for committed, missing in ((["docs/review.json"], "docs/REVIEW.md"),
+                                   (["docs/REVIEW.md"], "docs/review.json")):
+            self.commit_fixture(*committed)
+            for args in ((), ("--dry-run",)):
+                done = self.plan(*args)
+                self.assertEqual(done.returncode, 2, args)
+                self.assertIn(f"prerequisites: {missing} is not in the commit plan runs on (HEAD)",
+                              done.stderr)
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD", "refs/heads/none"],
+                       check=True)
+        self.assertEqual(self.plan().returncode, 2)
         self.assertEqual(self.calls(), [])
+        # A config named with --config must be committed too.
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD", "refs/heads/master"],
+                       check=True)
+        self.commit_fixture("docs/REVIEW.md", "docs/review.json")
+        (self.root / "docs" / "other.json").write_text(json.dumps(self.config))
+        done = self.plan("--config", "docs/other.json")
+        self.assertIn("prerequisites: docs/other.json is not in the commit", done.stderr)
+        self.assertEqual(self.calls(), [])
+
+    def test_refusals(self):
+        done = self.plan("--sweep", "CR5")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no label sweep:CR5, and the next sweep is CR1", done.stderr)
+        self.assertEqual(self.run_script("dry-run", "--dry-run", "--sweep", "CR1").returncode, 2)
+        self.config["areas_command"] = f"{sys.executable} -c \"pass\""
+        self.write_inputs()
+        done = self.plan()
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no areas", done.stderr)
+        self.assertEqual(self.made(), [])
 
 
 HEAD1 = "1" * 40
@@ -608,6 +1174,10 @@ class PrReviewTest(unittest.TestCase):
     calls = FileReviewTest.calls
     store = FileReviewTest.store
     write_inputs = FileReviewTest.write_inputs
+    seed_steps = FileReviewTest.seed_steps
+    write_store = FileReviewTest.write_store
+    new_issues = FileReviewTest.new_issues
+    edit_store = FileReviewTest.edit_store
 
     def write_pass(self, record):
         self.pr_pad = self.root / "review" / "pr-74"
@@ -760,7 +1330,7 @@ class PrReviewTest(unittest.TestCase):
         self.post_first()
         done = self.pr("file", "74", "P1-4")
         self.assertEqual(done.returncode, 0, done.stderr)
-        issues = self.store()["issues"]
+        issues = self.new_issues()
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0]["title"], "Two documents give different timeouts.")
         self.assertEqual(issues[0]["labels"], ["review", "area:docs"])
@@ -773,10 +1343,10 @@ class PrReviewTest(unittest.TestCase):
         # --all files the rest of the latest pass's list, never the exploitable one.
         done = self.pr("file", "74", "--all")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual([i["title"] for i in self.store()["issues"]],
+        self.assertEqual([i["title"] for i in self.new_issues()],
                          ["Two documents give different timeouts.",
                           "An old helper now fails on the new limit."])
-        self.assertTrue(self.store()["issues"][1]["body"].startswith(
+        self.assertTrue(self.new_issues()[1]["body"].startswith(
             "severity Low\nclass regression\n"))
         self.assertEqual(self.store()["advisories"], [])
         self.assertIn("kept in the work pad, flagged exploitable: P1-6", done.stdout)
@@ -786,7 +1356,7 @@ class PrReviewTest(unittest.TestCase):
         self.post_first()
         done = self.pr("file", "74", "P1-2")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(self.store()["issues"], [])
+        self.assertEqual(self.new_issues(), [])
         advisory = self.store()["advisories"][0]
         self.assertEqual(advisory["summary"], "A forged token is accepted.")
         self.assertTrue(advisory["description"].endswith("<!-- pr-review 74 P1-2 advisory -->\n"))
@@ -806,6 +1376,64 @@ class PrReviewTest(unittest.TestCase):
         self.write_pass(first_pass())
         self.assertEqual(self.pr("file", "74", "P1-4", "--all").returncode, 2)
         self.assertEqual(self.pr("file", "74").returncode, 2)
+
+    # ---- pr file follows the pull request's sweep ----
+
+    def test_pr_file_without_a_sweep_label_is_plain_with_no_parent(self):
+        self.post_first()
+        self.assertEqual(self.pr("file", "74", "P1-4").returncode, 0)
+        [issue] = self.new_issues()
+        self.assertEqual((issue["title"], issue["parent"]),
+                         ("Two documents give different timeouts.", None))
+        self.assertNotIn("sweep:CR1", issue["labels"])
+        self.assertNotIn(["api", "graphql"], [c[:2] for c in self.calls()])
+
+    def test_pr_file_follows_the_pull_requests_sweep_label(self):
+        self.edit_store(lambda s: s.update(pr_labels=["hardening", "sweep:CR1"]))
+        self.post_first()
+        done = self.pr("file", "74", "P1-5")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        [helper] = self.new_issues()
+        self.assertEqual((helper["title"], helper["parent"]),
+                         ("CR1.1-3 An old helper now fails on the new limit.", 42))
+        self.assertEqual(helper["labels"], ["review", "sweep:CR1", "area:core"])
+        self.assertEqual(self.pr_state()["P1-5 issue"]["attached"], 42)
+        # --all files the rest; P1-5 keeps its number, and the docs one is its step's first.
+        done = self.pr("file", "74", "--all")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("changed since", done.stderr)
+        self.assertEqual([(i["title"], i["parent"]) for i in self.new_issues()],
+                         [("CR1.1-3 An old helper now fails on the new limit.", 42),
+                          ("CR1.2-1 Two documents give different timeouts.", 43)])
+        # The exploitable one, named, is an advisory: a plain title and no parent.
+        self.assertEqual(self.pr("file", "74", "P1-6").returncode, 0)
+        self.assertEqual(self.store()["advisories"][0]["summary"], "A replayed request is accepted.")
+
+    def test_pr_file_stop_between_filing_and_attaching(self):
+        self.edit_store(lambda s: s.update(pr_labels=["sweep:CR1"]))
+        self.post_first()
+        # Creates: 1 the review, 2 P1-4's issue, 3 its attach, which fails.
+        self.assertEqual(self.pr("file", "74", "P1-4", STUB_FAIL_AT="3").returncode, 1)
+        self.assertNotIn("attached", self.pr_state()["P1-4 issue"])
+        done = self.pr("file", "74", "P1-4")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        [issue] = self.new_issues()
+        self.assertEqual(issue["parent"], 43)
+        self.assertEqual(sum(c[:2] == ["issue", "create"] for c in self.posts()), 1)
+
+    def test_pr_file_refuses_two_sweep_labels_or_no_parent(self):
+        self.post_first()
+        self.edit_store(lambda s: s.update(pr_labels=["sweep:CR1", "sweep:H2"]))
+        done = self.pr("file", "74", "P1-4")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("#74 carries 2 sweep labels (sweep:CR1, sweep:H2)", done.stderr)
+        # sweep:H2 has no docs step.
+        self.edit_store(lambda s: s.update(pr_labels=["sweep:H2"]))
+        done = self.pr("file", "74", "P1-4")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no parent for P1-4: area docs: no open sub-issue of the anchor #46 is "
+                      "labelled area:docs", done.stderr)
+        self.assertEqual(len(self.posts()), 1)
 
     # ---- the gates ----
 
@@ -868,7 +1496,7 @@ class PrReviewTest(unittest.TestCase):
             self.assertNotIn(text, sent)
         self.assertIn("regression High 0, Med 1, Low 0; latent High 0, Med 1, Low 1 "
                       "(2 on their lines, 1 additional)", self.store()["reviews"][0]["body"])
-        self.assertEqual(len(self.store()["issues"]), 1)
+        self.assertEqual(len(self.new_issues()), 1)
 
     def test_no_forbidden_call_is_ever_made(self):
         self.post_first()
@@ -885,6 +1513,8 @@ class PrReviewTest(unittest.TestCase):
             if call[0] == "api" and call[1] == "--method":
                 self.assertEqual(call[2], "POST", call)
                 self.assertRegex(call[3], allowed_posts)
+            elif call[:2] == ["api", "repos/owner/proj/issues/74"]:
+                self.assertEqual(len(call), 2, call)  # the pull request's labels, read
             elif call[0] == "api":
                 self.assertEqual(call[1], "--paginate", call)
                 self.assertRegex(call[2], allowed_lists)
@@ -985,6 +1615,8 @@ class RespondTest(unittest.TestCase):
     calls = FileReviewTest.calls
     store = FileReviewTest.store
     write_inputs = FileReviewTest.write_inputs
+    seed_steps = FileReviewTest.seed_steps
+    write_store = FileReviewTest.write_store
     everything_sent = PrReviewTest.everything_sent
 
     def setUp(self):

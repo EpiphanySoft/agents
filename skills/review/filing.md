@@ -1,48 +1,86 @@
-# Filing a review: the records and the script
+# Reporting: the records and the script
 
-`file_review.py`, beside this file, files a review from two records the filing pass writes in the
-work pad, and files the owner's questions while an unattended review runs. Its `pr` commands post a
-pull request review's passes (the `pr-review` skill; see *A pull request: `pr`*), and `respond` the
-author's answers (the `pr-respond` skill; see *The author's round: `respond`*). It parses no markdown: the unit files are read by the model pass, which writes the records.
-Python 3 standard library and the `gh` CLI, signed in to an account that may create issues and
-security advisories in the repository.
+`file_review.py`, beside this file, lays out a review's sweep (Planning, `plan`), files the
+review from two records the filing pass writes in the work pad, and files the owner's questions while
+an unattended review runs. Its `pr` commands post a pull request review's passes (the `pr-review`
+skill; see *A pull request: `pr`*), and `respond` the author's answers (the `pr-respond` skill; see
+*The author's round: `respond`*). It parses no markdown: the unit files are read by the model pass,
+which writes the records. Python 3 standard library and the `gh` CLI, signed in to an account that
+may create labels, issues and security advisories in the repository.
 
 ```
-python3 <skill>/file_review.py dry-run [--config docs/review.json] [--pad review/<nnnn>]
-python3 <skill>/file_review.py post    [--config docs/review.json] [--pad review/<nnnn>]
-python3 <skill>/file_review.py question <question.json> [--config ...] [--pad ...]
+python3 <skill>/file_review.py plan [--dry-run] [--sweep CR1] [--config docs/review.json]
+python3 <skill>/file_review.py dry-run [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
+python3 <skill>/file_review.py post    [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
+python3 <skill>/file_review.py question <question.json> [--sweep CR1] [--config ...] [--pad ...]
 python3 <skill>/file_review.py pr post <n> [--config ...] [--pad review/pr-<n>]
 python3 <skill>/file_review.py pr file <n> (<id> ... | --all) [--config ...] [--pad ...]
 python3 <skill>/file_review.py respond <n> [--config ...] [--pad review/pr-<n>]
 ```
 
 Run from the repository's root. `<skill>` is this folder, wherever the project's pin of the shared
-skills puts it. The work pad defaults to `review/<nnnn>` from the config's number.
+skills puts it.
+
+**Which review.** A review is named `<prefix><N>`, `CR1`: the prefix is the config's, and `N` its
+sweep's. `dry-run`, `post` and `question` take it from `--sweep CR1`, else from the branch they run
+on, `code-review-<N>`, and refuse when there is neither. The work pad defaults to `review/<N>`.
+Nothing about the sweep is kept in the work pad or the config: the sweep is its label and its issues.
 
 ## The config: `docs/review.json`
 
 Checked against [`review-config.schema.json`](review-config.schema.json); the script refuses a config
-that doesn't match, naming the field (`config.name.number: must be integer`).
+that doesn't match, naming the field (`config.prefix: must be string`).
 
 | Field | | What |
 |---|---|---|
 | `repo` | required | `owner/name` |
-| `name` | required | `{"prefix": "CR", "number": 1}`: the summary is "CR1: summary", the branch `code-review-0001`, the work pad `review/0001/` |
+| `prefix` | optional | default `CR`, letters only: the start of every review's name, `CR1`, whose number comes from its sweep |
 | `area_prefix` | required | the start of every area label, such as `area:` |
-| `areas_command` | optional | a command printing the areas, one name a line, without the prefix; without it, the areas are the repository's labels that start with `area_prefix` |
-| `labels` | optional | labels added to every finding's issue |
+| `areas_command` | optional | a command printing the areas, one name a line, without the prefix, in their order; without it, the areas are the repository's labels that start with `area_prefix`, sorted by name |
+| `labels` | optional | labels added to every issue the script makes: the anchor, the steps, the findings and the questions |
 | `kind_prefix` | optional | when set, each finding also gets the label `<kind_prefix><kind>`, such as `kind:bug`; without it, the kind is in the body only |
 | `question_label` | optional | default `question`: a finding that is a choice for the owner, and a question issue |
 | `text_check` | optional | a command with `{file}`, run on every title and body before posting; a non-zero exit stops the post |
 | `advisory_package` | optional | `{"ecosystem", "name"}` an advisory names; default `other` and the repository's name |
 
 Commands are split into words as a shell would, with no shell features; wrap one in `sh -c '...'` to
-use them. Every label must already exist in the repository: the script makes none.
+use them. Every label must already exist in the repository: the script makes none but the sweep's,
+in `plan`.
+
+## Planning: `plan`
+
+Planning's first step, the coordinator's, before the review's branch exists. The coordinator runs it
+on the target branch at the review's commit, having checked for itself that the pin of the shared
+skills there carries this skill (the script can't tell which pin does). `plan --dry-run` prints what
+it would make and makes nothing; `plan` makes it:
+
+1. **The prerequisites.** Before anything else, both `plan` and `plan --dry-run` refuse (exit 2),
+    making and reading nothing on GitHub, unless `docs/REVIEW.md` and the config file (`--config`,
+    `docs/review.json` by default) are tracked in the commit they run on, `HEAD`: a file on disk
+    that isn't committed doesn't count.
+2. **The sweep.** `N` is one more than the highest among the repository's `sweep:<prefix><N>`
+    labels, or 1, and `plan` makes the label `sweep:<prefix><N>` (`gh label create`). A label that
+    exists already when it is made stops the run. When the highest label's sweep has no anchor yet (a
+    plan that stopped after making its label), `plan` finishes that one instead of starting another.
+3. **The anchor**: an issue titled `<prefix><N> Code review` ("CR1 Code review"), labelled with the
+    sweep label and `labels`, no area label, its body listing the steps and ending
+    `<!-- review CR1 anchor -->`. It is the review's own step: the summary is a comment on it, and a
+    question about the review, a private question's notice and a finding with no area go under it.
+4. **The steps**: one per area, in the areas' order (`areas_command`'s, else the area labels sorted
+    by name), titled `<prefix><N>.<n> <area>` ("CR1.1 core"), labelled with the area's label, the
+    sweep label and `labels`, each ending `<!-- review CR1 step <area> -->`, and each made a sub-issue
+    of the anchor.
+
+Every title and body it would make passes the text check before anything is made; a failure makes
+nothing (exit 1). Each item is found again by its marker (`gh issue list`, every state) and a step
+already among the anchor's sub-issues isn't attached again, so a run after a stop makes only what is
+missing: `plan --sweep CR1` finishes CR1, as the stop's message says. `--sweep` names only the sweep
+that exists or the next one. It prints the branch and work pad the review then uses.
 
 ## The findings: `findings.jsonl`
 
 One JSON object a line, one line per surviving finding (confirmed, corrected, or, in a quick review,
-made), in the map's order: Phase 1's, then the units', then the tooling unit's. Rejected claims, and
+made), in the map's order: Doc Review's, then the units', then the tooling unit's. Rejected claims, and
 claims of a reading the owner rejected, are not in it.
 
 | Field | | What |
@@ -51,7 +89,7 @@ claims of a reading the owner rejected, are not in it.
 | `title` | required | one sentence, one line |
 | `severity` | required | `High`, `Med` or `Low` |
 | `kind` | required | the claim's kind |
-| `area` | required | one of the project's areas, or `null` when no area owns it (see the skill's *Filing*) |
+| `area` | required | one of the project's areas, or `null` when no area owns it (see the skill's *Reporting*) |
 | `requirements` | required | the requirement ids, `[]` for untraced |
 | `code` | required | `[{"file", "line", "quote"}]`, the quoted lines exactly; `[]` for a document claim |
 | `what_goes_wrong` | required | the concrete case |
@@ -87,28 +125,60 @@ the filing pass writes `findings.jsonl`.
 | `checked_and_sound` | a list: what was looked at closely and found right, so the next review need not repeat it |
 | `where_things_stand` | a list: what was left unread or read lightly, and where to start |
 
+## Parents and titles
+
+- **The anchor** is the one open issue with the sweep label, no parent and no finding's marker,
+    found through GraphQL (`repository.issues(states: OPEN, labels: [<sweep label>])`, with each
+    one's `parent`), once a run. A finding's marker is a review's `<!-- review <name> <id> -->`
+    (a question's included) or a pull request review's `<!-- pr-review <n> <id> issue -->`; the
+    anchor's and the steps' markers are not. None, or two or more, and the command is refused naming
+    them: Planning makes the anchor.
+- **The parent search.** A finding's parent is the one open sub-issue of the anchor that carries the
+    finding's area label and is no finding. A finding with no area goes under the anchor. No match,
+    or two or more, and the search fails naming the area and the issues. Reporting never makes a parent.
+- **The title rule.** A finding's title is `<step id>-<m> <sentence>`. The step id is the leading id
+    of the parent's title: the sweep's own name (`CR1` of the anchor's "CR1 Code review") or the
+    name and `.<n>` (`CR1.3` of "CR1.3 core"), at the start, followed by a space or the end. Any
+    other title ("Fix2 things", another sweep's "CR2.3 core") has no id. `m` is one more than the
+    highest `<step id>-<m>` among the parent's sub-issues' titles, in every state
+    (`GET repos/<repo>/issues/<parent>/sub_issues`), so a number is never used twice. Findings under
+    one parent take the next numbers in the plan's order. A parent whose title has no leading id
+    gives the plain sentence. A sub-issue with the marker of an item being filed is left out of the
+    count, so a run again after a stop gives the same numbers.
+- **Attaching.** `POST repos/<repo>/issues/<parent>/sub_issues` with `sub_issue_id`, the issue's
+    database id (`gh api repos/<repo>/issues/<n> --jq .id`). An issue already among the parent's
+    sub-issues is recorded, not attached again.
+- **Advisories** can't be sub-issues: a plain title, no parent, no number.
+
 ## What the script does
 
-- **`dry-run`** checks the config and both records, lists the areas, and writes
-    `filing-dry-run.md`: every issue and advisory it would make, with its title, labels, parent (always
-    none), exploitable mark and full body, the summary last with a placeholder for each link, and the plan's hash. It runs
-    the text check on each, lists any failure at the top and exits 1. It posts nothing.
-- **`post`** builds the plan again and refuses unless its hash matches the dry run's, so it posts
-    exactly what the owner read. Then, in order: each finding not yet posted, after its text check; an
-    issue through `gh issue create`, or an advisory through `gh api` (`POST
-    repos/<repo>/security-advisories`, which makes it a draft); then the summary, with each finding's
-    issue link, and only a count of the advisories. Each one is written to `filing-state.json` as soon
-    as it is made.
+- **`dry-run`** checks the config and both records, finds the anchor, lists the areas, and writes
+    `filing-dry-run.md`: every issue and advisory it would make, with its title, labels, parent (the
+    issue and its title, or why the search failed), exploitable mark and full body, the summary last with a
+    placeholder for each link, the plan's hash, and the records' hash. It runs the text check on each.
+    A failed parent search or text check is listed at the top and against its item, and the dry run
+    exits 1. It posts nothing.
+- **`post`** builds the plan again: it refuses a plan whose parent search fails, and unless both
+    hashes match the dry run's, so it posts exactly what the owner read; a parent or a number that
+    changed in the repository since is named as such. Then, in order, each finding not yet done: an
+    issue through `gh issue create`, after its text check, then its attach under its parent; or an
+    advisory through `gh api` (`POST repos/<repo>/security-advisories`, which makes it a draft).
+    Last, the summary, with each finding's issue link and only a count of the advisories: a comment on
+    the anchor (`POST repos/<repo>/issues/<anchor>/comments`). Each filing and each attach is written
+    to `filing-state.json` as soon as it is made.
 - **Again after a stop.** A failed text check or `gh` call stops the run (exit 1) and keeps the state.
-    Run `post` again and it skips what the state holds. A finding posted and changed since is left as it
-    is, and said so.
+    Run `post` again and it does only what the state doesn't hold: a finding filed but not attached is
+    only attached. A finding posted and changed since is left as it is, and said so.
 - **No copies.** Every body ends with a hidden marker naming the review and the item,
     `<!-- review CR1 U07-12 -->` (the summary's is `<!-- review CR1 summary -->`). Before it creates
     anything the state doesn't hold, `post` reads the repository's issues in every state (`gh issue
     list`) and its security advisories (`gh api`), once a run, and an item whose marker it finds there is
-    recorded in the state as found, not posted again. So a run that stopped between making an item and
+    recorded in the state as found, not posted again. For the summary comment it reads the anchor's
+    comments, only those whose `author_association` is `OWNER`, `MEMBER` or `COLLABORATOR`, so a
+    marker someone else planted can't stop it. So a run that stopped between making an item and
     recording it leaves no copy.
-- **Never** closes or edits an issue.
+- **Never** closes or edits an issue, makes a parent outside `plan`, or reads or writes a project
+    board.
 - A bad config or record is refused (exit 2) before anything is posted.
 
 ## The issue body
@@ -144,20 +214,30 @@ writes (in the work pad or a scratch directory):
     {"option": "Drop it", "means": "the limit is exclusive, as the code does"}
   ],
   "recommendation": "Keep it: R1.2 says up to and including.",
-  "claim": "U07-12"
+  "claim": "U07-12",
+  "area": "core"
 }
 ```
 
-`question`, `options` (two or more, each with what it means) and `recommendation` are required;
-`claim`, a work-pad id, is optional. The issue is titled "CR1 question: <the question's first line>",
-written as a walk-thru item (the question, the numbered options, the recommendation, the claim), and
-labelled with `question_label` and `labels`. Its title and body pass the text check first.
+`question`, `options` (two or more, each with what it means), `recommendation` and `area` are
+required; `claim`, a work-pad id, is optional. `area` is the claim's area, or `null` for a question
+about the review itself (Planning's, say). The issue is written as a walk-thru item (the question, the
+numbered options, the recommendation, the claim), labelled with `question_label`, `labels`, the sweep
+label and the area's label, and filed under the area's step by the parent search, as a finding is;
+a question with `area` `null` goes under the anchor. Its title follows the title rule,
+"CR1.1-3 Question: <the question's first line>" ("CR1-2 Question: ..." under the anchor), and its
+body names the review and ends with its marker, `<!-- review CR1 question-<hash> -->`, the hash
+taken from the question's file. It is filed, then attached. Its title and body pass the text check
+first. Run again with the same file, `question` finds the issue by its marker and only attaches it if
+it isn't yet.
 
 - **Private.** When `claim` is in `exploitable.json`, the question is appended to the work pad's
-    `questions.md`, and the issue filed says only that a private question is waiting, with no content.
-- **Not filed.** When the text check fails or `gh` does, the question is appended to `questions.md`
-    with the reason, and the command exits 1. For a private question, the notice that couldn't be
-    filed is noted there too.
+    `questions.md`, and the issue filed says only that a private question is waiting, with no content
+    and no area label, under the anchor: its area would say where to look.
+- **Not filed.** When the parent search, the text check or `gh` fails, the question is appended to
+    `questions.md` with the reason, and the command exits 1. A question filed but not attached is
+    kept there too, with its link and its parent; `question` run again attaches it. For a private
+    question, the notice that couldn't be filed is noted there too.
 
 Each entry in `questions.md` is headed by its title and says why it is kept there. The coordinator
 logs every exit 1 in `log.md`.
@@ -216,6 +296,12 @@ of its own findings, under a new id, with `decision`.
     anything is posted.
 - **`pr file <n> <id> ...`** files the additional findings the owner chose as issues, in the finding
     shape and labels of *The issue body* with its class, and a line saying which pass found it.
+    **The sweep only through the pull request:** it reads the pull request's labels
+    (`gh api repos/<repo>/issues/<n>`), and when one is a sweep label each issue takes that label,
+    the parent search under that sweep's anchor and the title rule of *Parents and titles*, and is
+    filed, then attached, both recorded in `pr-state.json`. A pull request with no sweep label gives a plain title, no sweep
+    label and no parent; one with two is refused. A failed parent search is refused before anything
+    is filed.
     `--all` takes every additional finding of the latest pass but the exploitable ones and the
     questions. An exploitable id, named on its own,
     is filed as a private draft security advisory, the way a full review files one. A finding on the
@@ -286,15 +372,33 @@ project, which is refused without it.
 `test_file_review.py` runs the script against a stub `gh` on `PATH` in a temp directory, so nothing
 reaches GitHub: the dry run, a post, a run again after a partial post or after an item made but not
 recorded, bad configs and records, a failing text check, the kind labels and exploitable marks, a
-question filed, kept private, not filed and failing its text check, and that nothing is closed or
-edited. For `pr`: a first pass, a run again after a partial post and after a review made but not
-recorded, a second pass replying on threads, filing the chosen additional findings, the classes and their prefixes, a failing text
-check, markers planted by others, refused records, that questions for the owner and exploitable
-claims reach no `gh` call, and
-that no forbidden call is made. For `respond`: a round's replies and its comment, a later round with
-the owner's decision, a run again after a partial post and after a reply made but not recorded, a
-commit not pushed, comments by others left unread and counted, a failing text check, refused records,
+question filed under its area's step or the anchor, kept private, not filed, with no parent, filed
+but not attached and attached on a run again, and failing its text check, and that nothing is closed
+or edited. For the sweep: the review named by its branch or `--sweep`, and refused with neither; the
+one anchor, none and two refused; the one step found past issues of another sweep, closed, not under
+the anchor or with a finding's marker; none and several failing the dry run, naming them; the
+numbers from the parent's sub-issues in any state, and the plain title of a parent with no leading
+id; a finding with no area under the anchor; post refusing a parent or a number changed since the
+dry run; a stop between filing and attaching, and an attach made but not recorded; and the summary
+comment posted once across runs, a planted marker ignored.
+
+For `plan`: the dry run making nothing; the label, the anchor and the steps under it, and the review
+filing under them; the next number after the highest label; a label made by someone else meanwhile
+stopping it; a plan that stopped after its label, or between a step and its attach, finished by a
+run again without a copy; the steps in `areas_command`'s order; a failing text check making nothing;
+and refused names.
+
+For `pr`: a first pass, a run again after a partial post and after a review made but not recorded, a
+second pass replying on threads, filing the chosen additional findings, the classes and their
+prefixes, a failing text check, markers planted by others, refused records, that questions for the
+owner and exploitable claims reach no `gh` call, `pr file` following the pull request's sweep label
+(plain without one, refused with two or with no parent, and a stop between filing and attaching),
 and that no forbidden call is made.
+
+For `respond`: a round's replies and its comment, a later round with the owner's decision, a run
+again after a partial post and after a reply made but not recorded, a commit not pushed, comments by
+others left unread and counted, a failing text check, refused records, and that no forbidden call is
+made.
 
 ```
 python3 skills/review/test_file_review.py

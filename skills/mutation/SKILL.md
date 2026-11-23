@@ -28,8 +28,8 @@ always settles one way. The examples here use mutmut, a Python tool; its words (
 
 **Unsteady outcomes.** A change whose outcome differs between two runs of the same code (killed in
 one, survived in the other) shows a test that isn't reliable, often one that depends on timing: it
-catches the change only sometimes. It is a finding, filed like a bug, and looked into before its
-area's survivors are settled.
+catches the change only sometimes. It is a finding, filed like a bug (below), and looked into before
+its area's survivors are settled.
 
 ## Runs
 
@@ -158,7 +158,9 @@ Read every survivor, by function and line, and settle it one of three ways.
 
 A survivor that shows a wrong answer is a **bug**. It is filed the way the project's review process
 files findings, gets a test that fails on the code as it was, and the settled record names its
-issue.
+issue. It follows a sweep only when the run is part of a pull request for a sweep's issues: that pull
+request's sweep label, the review skill's parent search and its title rule. Otherwise it has no
+sweep label, no parent and a plain title.
 
 ## No tests
 

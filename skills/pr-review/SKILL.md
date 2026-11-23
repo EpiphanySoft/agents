@@ -11,9 +11,9 @@ what they say. The built-in `/code-review` stays the quick correctness check; th
 method's, and its findings carry the review skill's evidence and confirmations.
 
 Everything shared is the `review` skill's, by its sections, and is not repeated here: *A session's
-habits*, the claim kinds and format (*Phase 2: the units*), *Exploitable if public*, *The second blind
-run*, *Checking*, *Confirmations and status*, *The owner's questions*, *Models and effort*, and the
-issue shape of *Filing*. The project supplies what *What a project supplies* lists. This skill defines
+habits*, the claim kinds and format (*Initial Code Review*), *Exploitable if public*, *The second blind
+run*, *Confirmation*, *Confirmations and status*, *The owner's questions*, *Models and effort*, and the
+issue shape of *Reporting*. The project supplies what *What a project supplies* lists. This skill defines
 only what differs for a pull request.
 
 ## When a pass runs
@@ -68,7 +68,7 @@ Every finding has a **class**:
 - **latent**: it is there at the merge base, and the pull request doesn't make it worse.
 
 The class rests on reading or running the code at both the merge base and the head. The checker
-confirms the class along with the claim; a class it changes is a correction (*Checking*).
+confirms the class along with the claim; a class it changes is a correction (*Confirmation*).
 
 ## Posting a pass
 
@@ -93,7 +93,10 @@ didn't touch, old code it reads, a document it doesn't change), goes in the revi
 *Additional findings*, with the same prefix: class, severity, title, file and line. It is filed as an
 issue, in the review skill's finding shape with `severity` still its first line and the class on the
 next, only when the owner says so, all or some: `file_review.py pr file <n> <id> ...`, or `--all` for
-the latest pass's list.
+the latest pass's list. The issues follow a sweep only through the pull request: a pull request for a
+sweep's issues carries the sweep label, and each issue then takes that label, a parent by the review
+skill's parent search and its title rule (`CR1.3-2 <sentence>`). A pull request with no sweep label
+gives a plain title and no parent; one with two sweep labels is refused.
 
 ## Plausible claims
 
@@ -107,8 +110,9 @@ under that pass's own id and with the decision, or drops it.
 
 A claim flagged exploitable is never posted or mentioned in public: no line comment, no line in the
 additional findings, no count, no reply. It stays in the work pad, and the agent's report to the owner names
-it with its evidence. The owner decides: a private draft advisory (`file_review.py pr file <n> <id>`),
-a word with the author, or posting it (the owner clears its flag, and the next pass posts it).
+it with its evidence. The owner decides: a private draft advisory (`file_review.py pr file <n> <id>`;
+an advisory has a plain title and no parent, sweep or not), a word with the author, or posting it (the
+owner clears its flag, and the next pass posts it).
 
 ## After a push
 
