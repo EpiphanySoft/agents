@@ -380,8 +380,10 @@ estimated tokens by model and a next-equivalent total (each model's tokens weigh
 relative to the next level's model), and `log.md` records what each piece ran on.
 
 - Discovery never runs below high effort.
-- Confirmation runs on a different model from discovery's, so they don't share blind spots. A severity
-    the checker raises is a correction like any other.
+- A checker never runs on the model that made what it checks, so they don't share blind spots:
+    Confirmation's model differs from that of the discovery run, the second blind run or the Doc Review
+    group whose claims it checks, and Cross-check's from that of the checker that found each item. A
+    severity the checker raises is a correction like any other.
 - Two blind discovery runs find more than either alone.
 - Reading prose may use a cheaper model at high effort.
 
@@ -395,7 +397,10 @@ each.
 | Discovery | next, high | strongest, high | strongest, high |
 | Second blind run: sensitive units | cheaper, high | cheaper, high | cheaper, xhigh |
 | Second blind run: other units | none | none | cheaper, high |
-| Confirmation and Cross-check | cheaper, high | cheaper, high | next, high |
+| Confirmation: discovery's claims | cheaper, high | cheaper, high | next, high |
+| Confirmation: claims made on cheaper (Doc Review, the second blind run) | next, high | next, high | next, high |
+| Cross-check: what a checker on cheaper found | next, high | next, high | next, high |
+| Cross-check: what a checker on next found | cheaper, high | cheaper, high | cheaper, high |
 | Reporting (dry run): the script, and a model pass writing the issue texts, the summary and the exploitable marks | next, high | next, high | next, high |
 
 Recommend **Standard** by default, **Plus** when a review covers much sensitive or never-reviewed code
