@@ -40,7 +40,10 @@ that doesn't match, naming the field (`config.prefix: must be string`).
 | `areas_command` | optional | a command printing the areas, one name a line, without the prefix, in their order; without it, the areas are the repository's labels that start with `area_prefix`, sorted by name |
 | `labels` | optional | labels added to every issue the script makes: the anchor, the steps, the findings and the questions |
 | `kind_prefix` | optional | when set, each finding also gets the label `<kind_prefix><kind>`, such as `kind:bug`; without it, the kind is in the body only |
-| `question_label` | optional | default `question`: a finding that is a choice for the owner, and a question issue |
+| `question_label` | optional | default `question`: a question issue |
+| `refine_label` | optional | default `refine`: a finding that is a choice for the owner, until the owner decides |
+| `dismiss_label` | optional | default `dismiss`: a finding the work showed to be no defect (the `review-triage` skill) |
+| `schedule`, `unit_size`, `open_units` | optional | the work schedule's path and limits, read by the `review-triage` skill's `triage.py` |
 | `text_check` | optional | a command with `{file}`, run on every title and body before posting; a non-zero exit stops the post |
 | `advisory_package` | optional | `{"ecosystem", "name"}` an advisory names; default `other` and the repository's name |
 
@@ -126,7 +129,7 @@ claims of a reading the owner rejected, are not in it.
 | `alternatives` | optional | a list |
 | `decision` | optional | the agreed resolution, from `decisions.md` |
 | `confirmations` | required | the count, 0 or more |
-| `question` | optional | `true` when it is a choice for the owner: adds the question label |
+| `question` | optional | `true` when it is a choice for the owner: adds the refine label |
 | `exploitable` | optional | `true` when the review flagged it exploitable if public; default `false` |
 | `advisory` | optional | `true` files it as a private draft security advisory instead of an issue; defaults to `exploitable`, and is set only where the owner changed a mark at the read |
 

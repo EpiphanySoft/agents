@@ -53,7 +53,7 @@ STUB_GH = textwrap.dedent("""\
             sys.exit(1)
     def value(flag):
         return args[args.index(flag) + 1]
-    fixed = ["area:core", "area:docs", "review", "question", "bug", "kind:bug", "kind:differs"]
+    fixed = ["area:core", "area:docs", "review", "question", "refine", "dismiss", "bug", "kind:bug", "kind:differs"]
     if args[:2] == ["label", "list"]:
         print(json.dumps([{"name": n} for n in fixed + store.get("labels", [])]))
     elif args[:2] == ["label", "create"]:
@@ -378,7 +378,7 @@ class FileReviewTest(unittest.TestCase):
         self.assertIn("- title: CR1.2-1 Two documents give different timeouts.\n", text)
         self.assertIn("## 1. U01-1: public issue", text)
         self.assertIn("## 2. U01-2: draft security advisory, private", text)
-        self.assertIn("- labels: review, sweep:CR1, area:docs, question", text)
+        self.assertIn("- labels: review, sweep:CR1, area:docs, refine", text)
         self.assertIn("- labels: review, sweep:CR1, area:core\n", text)
         self.assertIn("- parent: #42 CR1.1 core\n", text)
         self.assertIn("- parent: #43 CR1.2 docs\n", text)
@@ -398,7 +398,7 @@ class FileReviewTest(unittest.TestCase):
         self.assertEqual(self.run_script("dry-run").returncode, 0)
         text = self.dry_run_text()
         self.assertIn("- labels: review, sweep:CR1, area:core, kind:bug\n", text)
-        self.assertIn("- labels: review, sweep:CR1, area:docs, kind:differs, question\n", text)
+        self.assertIn("- labels: review, sweep:CR1, area:docs, kind:differs, refine\n", text)
 
     def test_advisory_follows_the_mark_unless_set(self):
         self.run_script("dry-run")
@@ -541,7 +541,7 @@ class FileReviewTest(unittest.TestCase):
         text = self.dry_run_text()
         self.assertIn("- title: CR1-1 Two documents give different timeouts.\n", text)
         self.assertIn("- parent: #41 CR1 Code review\n", text)
-        self.assertIn("- labels: review, sweep:CR1, question\n", text)
+        self.assertIn("- labels: review, sweep:CR1, refine\n", text)
 
     def test_the_review_is_named_by_its_branch_or_by_sweep(self):
         # Off its branch, the review must be named.
@@ -578,7 +578,7 @@ class FileReviewTest(unittest.TestCase):
                           "repos/owner/proj/security-advisories",
                           "issue", "repos/owner/proj/issues/43/sub_issues",
                           "repos/owner/proj/issues/41/comments"])
-        self.assertIn("question", calls[3])
+        self.assertIn("refine", calls[3])
         issues = {i["number"]: i for i in self.new_issues()}
         self.assertEqual(sorted(issues), [101, 102])
         self.assertEqual((issues[101]["title"], issues[101]["parent"]),
