@@ -131,9 +131,10 @@ the filing pass writes `findings.jsonl`.
     finding's area label and is no finding. A finding with no area goes under the anchor. No match,
     or two or more, and the search fails naming the area and the issues. Filing never makes a parent.
 - **The title rule.** A finding's title is `<step id>-<m> <sentence>`. The step id is the leading id
-    of the parent's title (`CR1.3` of "CR1.3 core", `CR1` of the anchor's "CR1 Code review"); `m`
-    is one more than the highest
-    `<step id>-<m>` among the parent's sub-issues' titles, in every state
+    of the parent's title: the sweep's own name (`CR1` of the anchor's "CR1 Code review") or the
+    name and `.<n>` (`CR1.3` of "CR1.3 core"), at the start, followed by a space or the end. Any
+    other title ("Fix2 things", another sweep's "CR2.3 core") has no id. `m` is one more than the
+    highest `<step id>-<m>` among the parent's sub-issues' titles, in every state
     (`GET repos/<repo>/issues/<parent>/sub_issues`), so a number is never used twice. Findings under
     one parent take the next numbers in the plan's order. A parent whose title has no leading id
     gives the plain sentence. A sub-issue with the marker of an item being filed is left out of the

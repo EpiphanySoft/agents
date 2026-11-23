@@ -296,7 +296,6 @@ OPEN_ISSUES_QUERY = """query($owner: String!, $name: String!, $label: String!, $
   }
 }"""
 
-STEP_ID = re.compile(r"^([A-Za-z]+[0-9]+(?:\.[0-9]+)*)(?=\s|$)")
 PLAN_KEYS = ("anchor", "summary")
 
 
@@ -308,10 +307,11 @@ def is_finding(body):
         any(m.group(2).endswith(" issue") for m in PR_MARKER.finditer(body))
 
 
-def step_id(title):
-    """The leading id of a parent's title, "CR1.3" of "CR1.3 trust" and "CR1" of "CR1 Code
-    review", or None."""
-    m = STEP_ID.match(title)
+def step_id(title, name):
+    """The leading id of a parent's title in the sweep named name: the name itself ("CR1" of "CR1
+    Code review") or the name and ".<n>" ("CR1.3" of "CR1.3 trust"), followed by a space or the
+    end. Any other title (another sweep's id, "Fix2 things") has none: None."""
+    m = re.match(rf"({re.escape(name)}(?:\.[0-9]+)?)(?=\s|$)", title)
     return m.group(1) if m else None
 
 
@@ -322,6 +322,7 @@ class Sweep:
 
     def __init__(self, config, label):
         self.config, self.label = config, label
+        self.name = label[len(SWEEP_PREFIX):]
         owner, name = config["repo"].split("/")
         out = run(["gh", "api", "graphql", "--paginate", "-f", f"query={OPEN_ISSUES_QUERY}",
                    "-f", f"owner={owner}", "-f", f"name={name}", "-f", f"label={label}"],
@@ -370,7 +371,7 @@ class Sweep:
         with no leading id, or no parent, gives the plain sentence. {key: title}."""
         next_m, titles = {}, {}
         for key, parent, sentence in entries:
-            sid = step_id(parent["title"]) if parent else None
+            sid = step_id(parent["title"], self.name) if parent else None
             if sid is None:
                 titles[key] = sentence
                 continue

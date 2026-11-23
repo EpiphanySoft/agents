@@ -482,6 +482,31 @@ class FileReviewTest(unittest.TestCase):
         # The anchor's id is the review's name: CR1 of "CR1 Code review".
         self.assertIn("- title: CR1.1-3 A value on the limit is dropped.\n", text)
 
+    def test_only_the_sweeps_own_name_is_a_step_id(self):
+        def titled(core, docs):
+            self.seed_steps()
+            self.edit_store(lambda s: [i.update(title={42: core, 43: docs}[i["number"]])
+                                       for i in s["issues"] if i["number"] in (42, 43)])
+            self.assertEqual(self.run_script("dry-run").returncode, 0)
+            return self.dry_run_text()
+        # A step's id: the name and ".<n>".
+        text = titled("CR1.3 core", "CR1.12 docs")
+        self.assertIn("- title: CR1.3-1 A value on the limit is dropped.\n", text)
+        self.assertIn("- title: CR1.12-1 Two documents give different timeouts.\n", text)
+        # Not an id: a word with a digit, another sweep's id, the name run on.
+        for core, docs in (("Fix2 things", "CR2.3 docs"), ("CR1x core", "CR1.2.1 docs"),
+                           ("CR12 core", "CR1.a docs")):
+            text = titled(core, docs)
+            self.assertIn("- title: A value on the limit is dropped.\n", text, core)
+            self.assertIn("- title: Two documents give different timeouts.\n", text, docs)
+        # The anchor's id: the name itself.
+        self.seed_steps()
+        self.findings[2]["area"] = None
+        self.write_inputs()
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        self.assertIn("- title: CR1-1 Two documents give different timeouts.\n",
+                      self.dry_run_text())
+
     def test_a_finding_no_area_owns_goes_under_the_anchor(self):
         self.findings[2]["area"] = None
         self.write_inputs()
