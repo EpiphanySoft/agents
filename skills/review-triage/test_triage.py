@@ -176,6 +176,134 @@ class TriageTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("work pad review/9: not a folder", done.stderr)
 
+    # ---- sorted ----
+
+    ASK = {"question": "Is the limit inclusive?",
+           "options": [{"option": "Inclusive", "means": "a value on the limit is kept"},
+                       {"option": "Exclusive", "means": "the requirement says so, the code stays"}],
+           "recommendation": "Inclusive: R1.2 says up to and including."}
+
+    def sort_files(self, sort=None, check=None):
+        """Gather, then write the sort's files: sort-core.jsonl, sort-docs.jsonl and check.jsonl."""
+        self.assertEqual(self.run_script("gather").returncode, 0)
+        folder = self.root / "review" / "1" / "triage"
+        sort = sort or {
+            "core": [record(10, "src/core.py", related=[12]), record(11, "src/log.py"),
+                     record(12, "src/core.py", depends_on=[10]), record(17, "tests/test_core.py")],
+            "docs": [record(13, "docs/a.md", readiness="choice", ask=self.ASK),
+                     record(14, "docs/b.md"),
+                     record(18, "docs/b.md", readiness="not now", why="later work")]}
+        check = check if check is not None else [
+            {"finding": 10, "readiness": "ready", "note": "The remedy is one line."},
+            {"finding": 11, "readiness": "choice", "note": "What is logged is the user's to see."},
+            {"finding": 14, "readiness": "ready", "note": "A definition is added."}]
+        for name, lines in [*((f"sort-{k}", v) for k, v in sort.items()), ("check", check)]:
+            (folder / f"{name}.jsonl").write_text(
+                "".join((x if isinstance(x, str) else json.dumps(x)) + "\n" for x in lines))
+        return folder
+
+    def test_sorted_passes_whole_files_and_settles_where_the_checker_differs(self):
+        folder = self.sort_files()
+        done = self.run_script("sorted")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn('differs: #11 is "ready" to the sorter and "choice" to the checker: a choice, '
+                      "whose ask is still to write", done.stdout)
+        self.assertIn("7 of 7 findings sorted: 4 ready, 2 choice, 0 check, 1 not now; the checker "
+                      "differs on 1; no problems", done.stdout)
+        got = {r["finding"]: r for r in json.loads((folder / "sorted.json").read_text())}
+        self.assertEqual(sorted(got), [10, 11, 12, 13, 14, 17, 18])
+        self.assertEqual((got[11]["readiness"], got[11]["sorted_as"],
+                          got[11]["checker"]["readiness"]), ("choice", "ready", "choice"))
+        self.assertEqual((got[10]["readiness"], got[10]["checker"]["readiness"]),
+                         ("ready", "ready"))
+        self.assertNotIn("sorted_as", got[10])
+        self.assertNotIn("checker", got[12])  # a Low finding: the checker doesn't judge it
+        self.assertEqual(got[13]["ask"], self.ASK)
+
+    def sorted_problems(self, *needles, **files):
+        folder = self.sort_files(**files)
+        done = self.run_script("sorted")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        for needle in needles:
+            self.assertIn(f"problem: {needle}", done.stderr)
+        self.assertFalse((folder / "sorted.json").exists())
+
+    def test_sorted_names_the_file_the_line_and_the_field(self):
+        self.sorted_problems(
+            "sort-core.jsonl:1: not JSON",
+            "sort-core.jsonl:2.size: must be one of small, medium, large",
+            "sort-core.jsonl:3.depend_on: not a known field",
+            "sort-core.jsonl:4.files: missing",
+            "sort-docs.jsonl:1.ask.options: needs at least 2 items",
+            "sort-docs.jsonl:2.ask.options[1].means: missing",
+            sort={"core": ["{not json", dict(record(11, "a"), size="tiny"),
+                           dict(record(12, "a"), depend_on=[10]),
+                           {k: v for k, v in record(17, "a").items() if k != "files"}],
+                  "docs": [record(13, "a", readiness="choice",
+                                  ask=dict(self.ASK, options=self.ASK["options"][:1])),
+                           record(14, "a", readiness="choice", ask=dict(self.ASK, options=[
+                               self.ASK["options"][0], {"option": "Exclusive"}]))]})
+
+    def test_a_sort_line_holds_what_its_readiness_calls_for(self):
+        self.sorted_problems(
+            "sort-core.jsonl:1: #10 is a choice with no ask: the question, the options and the "
+            "recommendation",
+            'sort-core.jsonl:2: #11 has an ask and is sorted as "ready", not as a choice',
+            "sort-core.jsonl:3: #12 is a not now with no why",
+            "sort-core.jsonl:4: #17 names itself",
+            sort={"core": [record(10, "a", readiness="choice"), record(11, "a", ask=self.ASK),
+                           record(12, "a", readiness="not now"), record(17, "a", related=[17])],
+                  "docs": [record(13, "a"), record(14, "a"), record(18, "a")]})
+
+    def test_every_finding_is_sorted_once_and_every_high_and_med_one_checked_once(self):
+        self.sorted_problems(
+            "#12 has no sort record",
+            "#13 is sorted 2 times (sort-core.jsonl:3, sort-docs.jsonl:1)",
+            "sort-docs.jsonl:3: #99 is no finding of findings.json",
+            "sort-core.jsonl:1: #10 names #77, which is no finding of findings.json",
+            "#11 (Med) has no line of the checker's",
+            "#14 is judged by the checker 2 times (check.jsonl:2, check.jsonl:3)",
+            "check.jsonl:4: #98 is no finding of findings.json",
+            sort={"core": [record(10, "a", depends_on=[77]), record(11, "a"), record(13, "a"),
+                           record(17, "a")],
+                  "docs": [record(13, "a"), record(14, "a"), record(99, "a"), record(18, "a")]},
+            check=[{"finding": 10, "readiness": "ready", "note": "n"},
+                   {"finding": 14, "readiness": "ready", "note": "n"},
+                   {"finding": 14, "readiness": "choice", "note": "n"},
+                   {"finding": 98, "readiness": "ready", "note": "n"}])
+
+    def test_a_piece_checks_its_own_file_alone(self):
+        folder = self.sort_files()
+        # Its lines only: that other findings are unsorted is not its to answer.
+        done = self.run_script("sorted", str(folder / "sort-docs.jsonl"))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines(), ["sort-docs.jsonl: 3 lines read, no problems"])
+        (folder / "check.jsonl").write_text('{"finding": 10, "readiness": "sure", "note": "n"}\n')
+        done = self.run_script("sorted", str(folder / "check.jsonl"), str(folder / "sort-core.jsonl"))
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("problem: check.jsonl:1.readiness: must be one of ready, choice, check, "
+                      "not now", done.stderr)
+        self.assertIn("sort-core.jsonl: 4 lines read, no problems", done.stdout)
+        self.assertFalse((folder / "sorted.json").exists())
+        # Off the review's branch, the pad is named.
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD",
+                        "refs/heads/unit-7"], check=True)
+        (self.root / "docs" / "remediation" / "CR1-schedule.json").unlink()
+        done = subprocess.run([sys.executable, str(SCRIPT), "sorted", "--pad", "review/9"],
+                              cwd=self.root, env=self.env, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("work pad review/9: no triage folder; gather makes it", done.stderr)
+
+    def test_the_sort_line_is_the_schedules_record_and_the_owners_ask(self):
+        here = SCRIPT.parent
+        kept = json.loads((here / "schedule.schema.json").read_text())["properties"]["findings"][
+            "items"]
+        line = json.loads((here / "sort.schema.json").read_text())["$defs"]["sort"]
+        self.assertEqual(sorted(set(line["properties"]) - set(kept["properties"])), ["ask", "why"])
+        for name, field in kept["properties"].items():
+            self.assertEqual(line["properties"][name], field, name)
+        self.assertEqual(line["required"], kept["required"])
+
     # ---- check ----
 
     def test_a_sound_schedule_has_no_problems(self):

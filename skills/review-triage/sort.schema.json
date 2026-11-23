@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "The sort's files (the review-triage skill)",
+  "description": "The lines the sort's pieces write, one JSON object a line. triage.py sorted checks every line against these and names the file, the line and the field.",
+  "$defs": {
+    "sort": {
+      "type": "object",
+      "required": [
+        "finding",
+        "readiness",
+        "files",
+        "size",
+        "proof"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "finding": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Its issue's number."
+        },
+        "readiness": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "choice",
+            "check",
+            "not now"
+          ],
+          "description": "ready: the remedy is clear and nothing in it is the owner's to choose. choice: it needs the owner's decision. check: it can't be sorted until a fact is known. not now: proposed as later work or as not planned."
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "The files its fix changes."
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Optional. The findings that must be fixed before it, or that the same change fixes."
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "uniqueItems": true,
+          "description": "Optional. The findings that change the same function or turn on the same rule, without one having to come first: they are batched together where they fit, and asked together where they are choices."
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ],
+          "description": "small: one or two files and a test. medium: several files, or a proof that needs a container or a VM. large: a feature, or a change across a module."
+        },
+        "proof": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What proving the fix needs: a test, a container, a VM."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional. Anything the unit's session should know that the issue doesn't say."
+        },
+        "ask": {
+          "type": "object",
+          "required": [
+            "question",
+            "options",
+            "recommendation"
+          ],
+          "additionalProperties": false,
+          "description": "For a choice: the walk-thru item the owner is asked.",
+          "properties": {
+            "question": {
+              "type": "string",
+              "minLength": 1
+            },
+            "options": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "required": [
+                  "option",
+                  "means"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "option": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "means": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "What choosing it means: what changes, and what it costs."
+                  }
+                }
+              }
+            },
+            "recommendation": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The sorter's pick and its reason, most often the finding's remedy."
+            }
+          }
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1,
+          "description": "For a not now, and for a check that showed no defect: the reason."
+        }
+      },
+      "description": "A line of a sort piece's file, triage/sort-<step>.jsonl: the record the schedule keeps for a finding, and beside it what the owner will be asked. triage.py also holds: a choice has its ask, a not now its why, and nothing else has an ask."
+    },
+    "check": {
+      "type": "object",
+      "required": [
+        "finding",
+        "readiness",
+        "note"
+      ],
+      "additionalProperties": false,
+      "description": "A line of the checker's file, triage/check.jsonl: its own readiness for a High or Med finding.",
+      "properties": {
+        "finding": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Its issue's number."
+        },
+        "readiness": {
+          "type": "string",
+          "enum": [
+            "ready",
+            "choice",
+            "check",
+            "not now"
+          ],
+          "description": "ready: the remedy is clear and nothing in it is the owner's to choose. choice: it needs the owner's decision. check: it can't be sorted until a fact is known. not now: proposed as later work or as not planned."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One sentence of why."
+        }
+      }
+    }
+  }
+}

@@ -3,6 +3,7 @@
 them, and say which of its work units can start. See SKILL.md beside this script.
 
     triage.py gather      [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
+    triage.py sorted [<file> ...] [--sweep CR1] [--config ...] [--pad review/<N>]
     triage.py check       [--sweep CR1] [--config ...] [--schedule <file>] [--offline]
     triage.py next        [--sweep CR1] [--config ...] [--schedule <file>] [--started U08,U09]
     triage.py guard <unit> --base <ref> [--sweep CR1] [--config ...] [--schedule <file>]
@@ -14,7 +15,13 @@ docs/remediation/<sweep>-schedule.json by default), checked against schedule.sch
 
 `gather` writes the sweep's open findings, read from their issues, to <pad>/triage/findings.json:
 what the sort reads, each with its body and the comments of the project's owners, members and
-collaborators, where a decision is recorded. `check` checks a schedule: against the schema, against itself (a finding in one
+collaborators, where a decision is recorded. `sorted` checks the sort's files in <pad>/triage: every line of every sort-*.jsonl and check*.jsonl
+against sort.schema.json (a choice with its ask, a not now with its why), every gathered finding
+sorted once, every High and Med one judged once by the checker, and every finding a record names a
+gathered one. It lists where the checker differs from the sorter, which makes the finding a choice,
+and writes <pad>/triage/sorted.json: each finding's record with that settled. Given files, it checks
+only their lines, so a piece checks its own file before it ends. `check` checks a schedule: against
+the schema, against itself (a finding in one
 unit only, each with its record, a unit's files holding its findings' files, a dependency on an
 earlier unit, no unit over the project's unit_size without its reason) and, unless --offline, against
 GitHub (every open finding in a unit or set aside). `next` says, for each unit in order, whether it
@@ -27,8 +34,8 @@ unmerged unit claims. `unscheduled` lists the open findings the schedule doesn't
 It reads GitHub through the gh CLI and writes nothing there. Python 3 standard library, and the
 review skill's file_review.py for the config, the schema checker and the sweep's names.
 
-Exit status: 0 done; 1 the schedule has problems, a guard stopped, or a gh or git call failed;
-2 refused (a bad config, schedule or argument).
+Exit status: 0 done; 1 the sort or the schedule has problems, a guard stopped, or a gh or git call
+failed; 2 refused (a bad config, schedule or argument).
 """
 
 import sys
@@ -46,7 +53,9 @@ sys.path.insert(0, str(HERE.parent / "review"))
 import file_review as fr  # noqa: E402
 
 SCHEMA = HERE / "schedule.schema.json"
+SORT_SCHEMA = HERE / "sort.schema.json"
 FINDINGS_FILE = "findings.json"
+SORTED_FILE = "sorted.json"
 UNIT_MARKER = re.compile(r"<!-- remediation (\S+) (\S+) -->")
 SEVERITY = re.compile(r"^(?:\[[^\]\n]*\] )?severity (High|Med|Low)\b")
 SEVERITIES = ("High", "Med", "Low")
@@ -184,6 +193,119 @@ def cmd_gather(config, pad):
     unrated = sum(1 for f in findings if f["severity"] is None)
     print(f"wrote {folder / FINDINGS_FILE}: {len(findings)} open findings ({counts}"
           + (f", {unrated} with no severity" if unrated else "") + ")")
+    return 0
+
+
+# ---- sorted ----
+
+def read_lines(path, kind, schemas):
+    """([(where, record)], problems) of a sort piece's file (kind "sort") or the checker's
+    ("check"): each line JSON, of its schema, and a sort line with what its readiness calls for."""
+    records, problems = [], []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise fr.Refused(f"{path}: {e.strerror}")
+    for n, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        where = f"{path.name}:{n}"
+        try:
+            r = json.loads(line)
+        except json.JSONDecodeError as e:
+            problems.append(f"{where}: not JSON ({e.msg})")
+            continue
+        try:
+            fr.check_schema(r, schemas[kind], where)
+        except fr.Refused as e:
+            problems.append(str(e))
+            continue
+        if kind == "sort":
+            what = f"{where}: #{r['finding']}"
+            if r["readiness"] == "choice" and "ask" not in r:
+                problems.append(f"{what} is a choice with no ask: the question, the options and "
+                                "the recommendation")
+            if r["readiness"] != "choice" and "ask" in r:
+                problems.append(f"{what} has an ask and is sorted as \"{r['readiness']}\", not "
+                                "as a choice")
+            if r["readiness"] == "not now" and "why" not in r:
+                problems.append(f"{what} is a not now with no why")
+            if r["finding"] in r.get("depends_on", []) + r.get("related", []):
+                problems.append(f"{what} names itself")
+        records.append((where, r))
+    return records, problems
+
+
+def kind_of(path):
+    return "check" if path.name.startswith("check") else "sort"
+
+
+def cmd_sorted(pad, files):
+    schemas = fr.load_json(SORT_SCHEMA, "schema")["$defs"]
+    if files:  # a piece's own check: the lines of the files named, and no more
+        failed = False
+        for path in map(Path, files):
+            records, problems = read_lines(path, kind_of(path), schemas)
+            for line in problems:
+                print(f"problem: {line}", file=sys.stderr)
+            failed = failed or bool(problems)
+            print(f"{path.name}: {len(records)} lines read, "
+                  + (f"{len(problems)} problems" if problems else "no problems"))
+        return 1 if failed else 0
+    folder = pad / "triage"
+    findings = {f["number"]: f for f in fr.load_json(folder / FINDINGS_FILE, "findings")}
+    paths = sorted(folder.glob("sort-*.jsonl")) + sorted(folder.glob("check*.jsonl"))
+    if not any(kind_of(p) == "sort" for p in paths):
+        raise fr.Refused(f"{folder}: no sort-*.jsonl file; the sort's pieces write them")
+    lines, problems = {"sort": {}, "check": {}}, []
+    for path in paths:
+        records, bad = read_lines(path, kind_of(path), schemas)
+        problems += bad
+        for where, r in records:
+            lines[kind_of(path)].setdefault(r["finding"], []).append((where, r))
+    for kind, what in (("sort", "sorted"), ("check", "judged by the checker")):
+        for n, got in sorted(lines[kind].items()):
+            if n not in findings:
+                problems.append(f"{got[0][0]}: #{n} is no finding of {FINDINGS_FILE}")
+            elif len(got) > 1:
+                problems.append(f"#{n} is {what} {len(got)} times ("
+                                + ", ".join(w for w, _ in got) + ")")
+    for n, f in sorted(findings.items()):
+        if n not in lines["sort"]:
+            problems.append(f"#{n} has no sort record")
+        elif f["severity"] in ("High", "Med") and n not in lines["check"]:
+            problems.append(f"#{n} ({f['severity']}) has no line of the checker's")
+    for n, got in sorted(lines["sort"].items()):
+        for where, r in got:
+            for m in r.get("depends_on", []) + r.get("related", []):
+                if m not in findings:
+                    problems.append(f"{where}: #{n} names #{m}, which is no finding of "
+                                    f"{FINDINGS_FILE}")
+    for line in problems:
+        print(f"problem: {line}", file=sys.stderr)
+    out, differ, counts = [], 0, {}
+    for n in sorted(set(findings) & set(lines["sort"])):
+        r = dict(lines["sort"][n][0][1])
+        judged = lines["check"].get(n)
+        if judged:
+            r["checker"] = {k: judged[0][1][k] for k in ("readiness", "note")}
+            if r["checker"]["readiness"] != r["readiness"]:
+                # They differ: the finding is the owner's choice, whichever of them said what.
+                differ += 1
+                print(f"differs: #{n} is \"{r['readiness']}\" to the sorter and "
+                      f"\"{r['checker']['readiness']}\" to the checker: a choice"
+                      + ("" if "ask" in r else ", whose ask is still to write"))
+                r["sorted_as"], r["readiness"] = r["readiness"], "choice"
+        counts[r["readiness"]] = counts.get(r["readiness"], 0) + 1
+        out.append(r)
+    print(f"{len(out)} of {len(findings)} findings sorted: "
+          + ", ".join(f"{counts.get(k, 0)} {k}" for k in ("ready", "choice", "check", "not now"))
+          + f"; the checker differs on {differ}; "
+          + (f"{len(problems)} problems" if problems else "no problems"))
+    if problems:
+        return 1
+    (folder / SORTED_FILE).write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8")
+    print(f"wrote {folder / SORTED_FILE}")
     return 0
 
 
@@ -380,13 +502,15 @@ def cmd_unscheduled(config, schedule):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("command", choices=["gather", "check", "next", "guard", "unscheduled"])
-    parser.add_argument("args", nargs="*", help="guard: the unit's id")
+    parser.add_argument("command",
+                        choices=["gather", "sorted", "check", "next", "guard", "unscheduled"])
+    parser.add_argument("args", nargs="*", help="guard: the unit's id; sorted: the files to check "
+                        "alone (default: every sort and check file of the work pad)")
     parser.add_argument("--config", default="docs/review.json",
                         help="the project's review config (default docs/review.json)")
     parser.add_argument("--sweep", help="the sweep, <prefix><N> such as CR1 (default: from the "
                         "branch code-review-<N>, else from the one schedule file)")
-    parser.add_argument("--pad", help="gather: the review's work pad (default review/<N>)")
+    parser.add_argument("--pad", help="gather, sorted: the review's work pad (default review/<N>)")
     parser.add_argument("--schedule", help="the schedule file (default: the config's schedule path)")
     parser.add_argument("--base", help="guard: the commit the unit's branch is compared with")
     parser.add_argument("--started", default="", help="next: the ids of units begun with no pull "
@@ -396,8 +520,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         config = fr.load_config(args.config)
+        if args.command == "sorted" and (args.args or args.pad):
+            pad = Path(args.pad or ".")  # the files named, or the pad named: no sweep is needed
+            if not args.args and not (pad / "triage").is_dir():
+                raise fr.Refused(f"work pad {pad}: no triage folder; gather makes it")
+            return cmd_sorted(pad, args.args)
         number = sweep_number(config, args.sweep)
         fr.name_review(config, number)
+        if args.command == "sorted":
+            return cmd_sorted(Path(f"review/{number}"), [])
         if args.command != "guard" and args.args:
             raise fr.Refused(f"{args.command} takes no argument")
         if args.command == "gather":

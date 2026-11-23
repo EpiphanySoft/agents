@@ -140,9 +140,9 @@ Each finding gets a record:
 | **size** | small: one or two files and a test. medium: several files, or a proof that needs a container or a VM. large: a feature, or a change across a module. |
 | **proof** | what proving the fix needs: the test and its case, a container, a VM. For a document correction, the project's document checks. |
 
-A piece writes one JSON object a line, as it goes: the record as the schedule keeps it
-([`schedule.schema.json`](schedule.schema.json), an item of `findings`: `finding`, `readiness`,
-`files`, `depends_on`, `size`, `proof`, `note`), and beside it, for what the owner will be asked:
+A piece writes one JSON object a line, as it goes, in the form [`sort.schema.json`](sort.schema.json)
+gives: the record as the schedule keeps it (`finding`, `readiness`, `files`, `depends_on`,
+`related`, `size`, `proof`, `note`), and beside it, for what the owner will be asked:
 
 - for a `choice`, `ask`: its `question`, its `options` (two or more, each an `option` and what it
     `means`) and its `recommendation`, the sorter's own pick with the reason, most often the
@@ -181,12 +181,19 @@ a different model then judges the readiness of every High and Med finding again,
 alone and blind to the sorter's reasons: a finding wrongly sorted as ready is what stalls a unit
 later. It reads each finding whole, takes what the finding says was run as run, judges neither the
 severity nor the files, and writes one line a finding: `finding`, its `readiness` (any of the four)
-and a `note` of one sentence. The coordinator compares the two: where they differ in any way, the
-finding is a `choice`.
+and a `note` of one sentence. Where the two differ in any way, the finding is a `choice`.
 
-A piece writes only its own file, as it goes (*How it runs*). It reads and writes nothing on GitHub,
-labels nothing and commits nothing: the coordinator checks its file, writes the line in `log.md`
-and commits.
+A piece writes only its own file, as it goes (*How it runs*), and before it ends checks it with
+`triage.py sorted <its file>`, which holds every line to the schema. It reads and writes nothing on
+GitHub, labels nothing and commits nothing: the coordinator writes the line in `log.md` and commits.
+
+**The sort is whole** when `triage.py sorted` passes, with no file named. It holds every piece's
+file to the schema; every gathered finding sorted once, and every High and Med one judged once by
+the checker; a choice with its question, a `not now` with its reason; and every finding a record
+names a gathered one. It lists where the checker differs from the sorter, and writes
+`triage/sorted.json`: each finding's record with that settled, a differing one as a `choice` whose
+question the coordinator writes. The owner's choices, the batching and the schedule are made from
+that file, never from a piece's summary.
 
 ## The owner's choices
 
@@ -351,6 +358,7 @@ the repository's root:
 
 ```
 python3 <skill>/triage.py gather      [--sweep CR1] [--pad review/<N>]
+python3 <skill>/triage.py sorted [<file> ...] [--sweep CR1] [--pad review/<N>]
 python3 <skill>/triage.py check       [--sweep CR1] [--schedule <file>] [--offline]
 python3 <skill>/triage.py next        [--sweep CR1] [--schedule <file>] [--started U08,U09]
 python3 <skill>/triage.py guard <unit> --base <ref> [--sweep CR1] [--schedule <file>]
@@ -362,9 +370,11 @@ python3 <skill>/triage.py unscheduled [--sweep CR1] [--schedule <file>]
 - **A unit's state** is its pull request's, found by the unit's marker in its description; one
     closed without a merge counts for nothing. `--started` names units begun with no pull request
     yet, such as one started on top of another.
+- **`sorted`** reads the work pad's `triage/` folder: `findings.json`, every `sort-*.jsonl` and
+    `check*.jsonl`. With files named it checks their lines alone, and needs no sweep.
 - **`check --offline`** checks the schedule against its schema and itself, without GitHub.
-- **Exit status**: 0 done; 1 the schedule has problems, a guard stopped, or a `gh` or `git` call
-    failed; 2 refused (a bad config, schedule or argument).
+- **Exit status**: 0 done; 1 the sort or the schedule has problems, a guard stopped, or a `gh` or
+    `git` call failed; 2 refused (a bad config, schedule or argument).
 
 `test_triage.py` runs it against a stub `gh` in a temp directory, so nothing reaches GitHub.
 
