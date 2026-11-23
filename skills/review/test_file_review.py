@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for file_review.py, with a stub `gh` on PATH in a temp directory. Nothing reaches GitHub.
-FileReviewTest covers a full review's filing and questions; PlanTest the Planning step; PrReviewTest a
+FileReviewTest covers a full review's filing and questions; PlanTest Planning's `plan`; PrReviewTest a
 pull request's passes; RespondTest the author's rounds.
 
     python3 skills/review/test_file_review.py        (or: python3 -m unittest discover -s skills/review)
@@ -264,7 +264,7 @@ class FileReviewTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def seed_steps(self):
-        """The sweep the Planning step made: the anchor (#41) and its steps, core (#42, with two
+        """The sweep Planning made: the anchor (#41) and its steps, core (#42, with two
         earlier findings, one closed) and docs (#43); a closed sub-issue of the anchor, another
         sweep's anchor, and a finding with no parent."""
         def issue(n, title, labels, state="OPEN", parent=None, body=""):
@@ -919,7 +919,8 @@ class FileReviewTest(unittest.TestCase):
 
 
 class PlanTest(unittest.TestCase):
-    """The Planning step: the sweep's label, its anchor and one step per area under it."""
+    """Planning's `plan`: its prerequisites, the sweep's label, its anchor and one step per area
+    under it."""
     tearDown = FileReviewTest.tearDown
     run_script = FileReviewTest.run_script
     calls = FileReviewTest.calls
@@ -932,11 +933,30 @@ class PlanTest(unittest.TestCase):
     dry_run_text = FileReviewTest.dry_run_text
 
     def setUp(self):
-        """The shared setUp, on the target branch, with no review planned yet."""
+        """The shared setUp, on the target branch where the method has landed, with no review
+        planned yet."""
         FileReviewTest.setUp(self)
         subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD", "refs/heads/master"],
                        check=True)
+        (self.root / "docs" / "REVIEW.md").write_text("# Code review\n")
+        self.commit_fixture("docs/REVIEW.md", "docs/review.json")
         self.write_store(issues=[], labels=[])
+
+    def commit_fixture(self, *paths):
+        """Make HEAD of the temp repository a commit of paths, with git's plumbing alone: a test
+        fixture's object, never signed and never pushed."""
+        git = ["git", "-C", str(self.root)]
+        env = dict(os.environ, GIT_INDEX_FILE=str(self.root / ".git" / "fixture-index"))
+        subprocess.run(git + ["read-tree", "--empty"], env=env, check=True)
+        if paths:
+            subprocess.run(git + ["update-index", "--add", *paths], env=env, check=True)
+        tree = subprocess.run(git + ["write-tree"], env=env, check=True, capture_output=True,
+                              text=True).stdout.strip()
+        who = "Fixture <fixture@example.invalid> 0 +0000"
+        text = f"tree {tree}\nauthor {who}\ncommitter {who}\n\nThe fixture.\n"
+        commit = subprocess.run(git + ["hash-object", "-t", "commit", "-w", "--stdin"], input=text,
+                                check=True, capture_output=True, text=True).stdout.strip()
+        subprocess.run(git + ["update-ref", "HEAD", commit], check=True)
 
     def plan(self, *args, **env):
         return self.run_script("plan", *args, **env)
@@ -969,7 +989,8 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(issues[0]["body"].endswith("<!-- review CR1 anchor -->\n"))
         self.assertIn("- CR1.1 core\n- CR1.2 docs\n", issues[0]["body"])
         self.assertTrue(issues[1]["body"].endswith("<!-- review CR1 step core -->\n"))
-        # The review then files under it, named by its branch.
+        # The review then files under it, named by its branch, made from the target's commit.
+        subprocess.run(["git", "-C", str(self.root), "branch", "code-review-1"], check=True)
         subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD",
                         "refs/heads/code-review-1"], check=True)
         done = self.run_script("dry-run")
@@ -1047,6 +1068,29 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(done.returncode, 1)
         self.assertIn("nothing made", done.stderr)
         self.assertEqual(self.made(), [])
+
+    def test_the_prerequisites_are_checked_first(self):
+        # Each file on disk but not in HEAD, then no commit at all: refused, nothing read or made.
+        for committed, missing in ((["docs/review.json"], "docs/REVIEW.md"),
+                                   (["docs/REVIEW.md"], "docs/review.json")):
+            self.commit_fixture(*committed)
+            for args in ((), ("--dry-run",)):
+                done = self.plan(*args)
+                self.assertEqual(done.returncode, 2, args)
+                self.assertIn(f"prerequisites: {missing} is not in the commit plan runs on (HEAD)",
+                              done.stderr)
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD", "refs/heads/none"],
+                       check=True)
+        self.assertEqual(self.plan().returncode, 2)
+        self.assertEqual(self.calls(), [])
+        # A config named with --config must be committed too.
+        subprocess.run(["git", "-C", str(self.root), "symbolic-ref", "HEAD", "refs/heads/master"],
+                       check=True)
+        self.commit_fixture("docs/REVIEW.md", "docs/review.json")
+        (self.root / "docs" / "other.json").write_text(json.dumps(self.config))
+        done = self.plan("--config", "docs/other.json")
+        self.assertIn("prerequisites: docs/other.json is not in the commit", done.stderr)
+        self.assertEqual(self.calls(), [])
 
     def test_refusals(self):
         done = self.plan("--sweep", "CR5")

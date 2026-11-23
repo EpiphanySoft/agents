@@ -1,6 +1,6 @@
-# Filing a review: the records and the script
+# Reporting: the records and the script
 
-`file_review.py`, beside this file, lays out a review's sweep (the Planning step, `plan`), files the
+`file_review.py`, beside this file, lays out a review's sweep (Planning, `plan`), files the
 review from two records the filing pass writes in the work pad, and files the owner's questions while
 an unattended review runs. Its `pr` commands post a pull request review's passes (the `pr-review`
 skill; see *A pull request: `pr`*), and `respond` the author's answers (the `pr-respond` skill; see
@@ -47,20 +47,26 @@ Commands are split into words as a shell would, with no shell features; wrap one
 use them. Every label must already exist in the repository: the script makes none but the sweep's,
 in `plan`.
 
-## The Planning step: `plan`
+## Planning: `plan`
 
-Phase 0's first step, the coordinator's, before the review's branch exists. `plan --dry-run` prints
-what it would make and makes nothing; `plan` makes it:
+Planning's first step, the coordinator's, before the review's branch exists. The coordinator runs it
+on the target branch at the review's commit, having checked for itself that the pin of the shared
+skills there carries this skill (the script can't tell which pin does). `plan --dry-run` prints what
+it would make and makes nothing; `plan` makes it:
 
-1. **The sweep.** `N` is one more than the highest among the repository's `sweep:<prefix><N>`
+1. **The prerequisites.** Before anything else, both `plan` and `plan --dry-run` refuse (exit 2),
+    making and reading nothing on GitHub, unless `docs/REVIEW.md` and the config file (`--config`,
+    `docs/review.json` by default) are tracked in the commit they run on, `HEAD`: a file on disk
+    that isn't committed doesn't count.
+2. **The sweep.** `N` is one more than the highest among the repository's `sweep:<prefix><N>`
     labels, or 1, and `plan` makes the label `sweep:<prefix><N>` (`gh label create`). A label that
     exists already when it is made stops the run. When the highest label's sweep has no anchor yet (a
     plan that stopped after making its label), `plan` finishes that one instead of starting another.
-2. **The anchor**: an issue titled `<prefix><N> Code review` ("CR1 Code review"), labelled with the
+3. **The anchor**: an issue titled `<prefix><N> Code review` ("CR1 Code review"), labelled with the
     sweep label and `labels`, no area label, its body listing the steps and ending
     `<!-- review CR1 anchor -->`. It is the review's own step: the summary is a comment on it, and a
     question about the review, a private question's notice and a finding with no area go under it.
-3. **The steps**: one per area, in the areas' order (`areas_command`'s, else the area labels sorted
+4. **The steps**: one per area, in the areas' order (`areas_command`'s, else the area labels sorted
     by name), titled `<prefix><N>.<n> <area>` ("CR1.1 core"), labelled with the area's label, the
     sweep label and `labels`, each ending `<!-- review CR1 step <area> -->`, and each made a sub-issue
     of the anchor.
@@ -74,7 +80,7 @@ that exists or the next one. It prints the branch and work pad the review then u
 ## The findings: `findings.jsonl`
 
 One JSON object a line, one line per surviving finding (confirmed, corrected, or, in a quick review,
-made), in the map's order: Phase 1's, then the units', then the tooling unit's. Rejected claims, and
+made), in the map's order: Doc Review's, then the units', then the tooling unit's. Rejected claims, and
 claims of a reading the owner rejected, are not in it.
 
 | Field | | What |
@@ -83,7 +89,7 @@ claims of a reading the owner rejected, are not in it.
 | `title` | required | one sentence, one line |
 | `severity` | required | `High`, `Med` or `Low` |
 | `kind` | required | the claim's kind |
-| `area` | required | one of the project's areas, or `null` when no area owns it (see the skill's *Filing*) |
+| `area` | required | one of the project's areas, or `null` when no area owns it (see the skill's *Reporting*) |
 | `requirements` | required | the requirement ids, `[]` for untraced |
 | `code` | required | `[{"file", "line", "quote"}]`, the quoted lines exactly; `[]` for a document claim |
 | `what_goes_wrong` | required | the concrete case |
@@ -126,10 +132,10 @@ the filing pass writes `findings.jsonl`.
     one's `parent`), once a run. A finding's marker is a review's `<!-- review <name> <id> -->`
     (a question's included) or a pull request review's `<!-- pr-review <n> <id> issue -->`; the
     anchor's and the steps' markers are not. None, or two or more, and the command is refused naming
-    them: the Planning step makes the anchor.
+    them: Planning makes the anchor.
 - **The parent search.** A finding's parent is the one open sub-issue of the anchor that carries the
     finding's area label and is no finding. A finding with no area goes under the anchor. No match,
-    or two or more, and the search fails naming the area and the issues. Filing never makes a parent.
+    or two or more, and the search fails naming the area and the issues. Reporting never makes a parent.
 - **The title rule.** A finding's title is `<step id>-<m> <sentence>`. The step id is the leading id
     of the parent's title: the sweep's own name (`CR1` of the anchor's "CR1 Code review") or the
     name and `.<n>` (`CR1.3` of "CR1.3 core"), at the start, followed by a space or the end. Any
@@ -215,7 +221,7 @@ writes (in the work pad or a scratch directory):
 
 `question`, `options` (two or more, each with what it means), `recommendation` and `area` are
 required; `claim`, a work-pad id, is optional. `area` is the claim's area, or `null` for a question
-about the review itself (Phase 0's, say). The issue is written as a walk-thru item (the question, the
+about the review itself (Planning's, say). The issue is written as a walk-thru item (the question, the
 numbered options, the recommendation, the claim), labelled with `question_label`, `labels`, the sweep
 label and the area's label, and filed under the area's step by the parent search, as a finding is;
 a question with `area` `null` goes under the anchor. Its title follows the title rule,

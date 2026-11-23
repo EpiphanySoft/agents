@@ -13,7 +13,7 @@ passes. See filing.md beside this script.
     file_review.py respond <n> [--config docs/review.json] [--pad review/pr-<n>]
 
 The review is <prefix><N> (CR1): named by --sweep, or by the branch code-review-<N> it runs on.
-`plan`, the Planning step, makes the next sweep's label sweep:<prefix><N+1>, its anchor issue and one
+`plan`, Planning's first step, makes the next sweep's label sweep:<prefix><N+1>, its anchor issue and one
 step per area as the anchor's sub-issues, each found again by its marker, so a run that stopped
 finishes rather than repeats; --dry-run says what it would make. `dry-run` writes the whole plan to
 <pad>/filing-dry-run.md, each finding's parent and numbered title included, and posts nothing.
@@ -335,7 +335,7 @@ class Sweep:
             found = ", ".join(f"#{a['number']}" for a in anchors)
             raise Refused(f"the sweep {label} has {len(anchors)} open issues with no parent "
                           f"and no finding's marker{' (' + found + ')' if found else ''}: it needs "
-                          "one, its anchor, which the Planning step makes (file_review.py plan)")
+                          "one, its anchor, which Planning makes (file_review.py plan)")
         self.anchor = anchors[0]
         self._subs = {}
         self.steps = [s for s in self.sub_issues(self.anchor["number"])
@@ -353,7 +353,7 @@ class Sweep:
         anchor = f"#{self.anchor['number']}"
         if not matches:
             return None, (f"area {area}: no open sub-issue of the anchor {anchor} is labelled "
-                          f"{label}; the Planning step makes the steps")
+                          f"{label}; Planning makes the steps")
         return None, (f"area {area}: {len(matches)} open sub-issues of the anchor {anchor} are "
                       "labelled " + label + " (" + ", ".join(f"#{i['number']}" for i in matches)
                       + "); an area has one step")
@@ -1662,7 +1662,7 @@ def cmd_respond(config, pad, n):
     return 0
 
 
-# ---- the Planning step: plan ----
+# ---- Planning: plan ----
 
 PLAN_MARKER = re.compile(r"<!-- review (\S+) (anchor|step [^<>]+?) -->")
 
@@ -1696,7 +1696,22 @@ def plan_found(config, issues):
     return found
 
 
-def cmd_plan(config, given, dry):
+def check_prerequisites(config_path):
+    """Refused unless docs/REVIEW.md and the config are tracked in HEAD, the commit plan runs on."""
+    for path in ("docs/REVIEW.md", str(config_path)):
+        try:
+            done = subprocess.run(["git", "cat-file", "-e", f"HEAD:./{path}"],
+                                  capture_output=True, text=True)
+        except OSError as e:
+            raise Refused(f"prerequisites: cannot run git: {e.strerror}")
+        if done.returncode != 0:
+            raise Refused(f"prerequisites: {path} is not in the commit plan runs on (HEAD); run "
+                          "it on the target branch at the review's commit, once the method has "
+                          "landed there; nothing made")
+
+
+def cmd_plan(config, given, dry, config_path="docs/review.json"):
+    check_prerequisites(config_path)
     repo = config["repo"]
     out = run(["gh", "label", "list", "--repo", repo, "--limit", "1000", "--json", "name"],
               "gh label list")
@@ -1803,7 +1818,7 @@ def main(argv=None):
         if args.command == "plan":
             if args.args:
                 raise Refused("plan takes no file")
-            return cmd_plan(config, args.sweep, args.plan_dry)
+            return cmd_plan(config, args.sweep, args.plan_dry, args.config)
         if args.command == "respond":
             if len(args.args) != 1 or not re.fullmatch(r"[1-9][0-9]*", args.args[0]):
                 raise Refused("respond: <n>, the pull request's number")
