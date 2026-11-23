@@ -200,9 +200,9 @@ after the first has merged and it has taken the target branch in by a merge, nev
 5. **The owner merges**, every unit. After the merge: confirm and cleanup (the shared `CLAUDE.md` PR
     terms), then `next`.
 
-**Merge-readiness, in every update.** Whenever the owner is told anything about a pull request, the
-message says where its merge stands: "merge waits on CI and the review pass", naming each agreed
-thing not yet done, or "merge is yours" when nothing is left but the owner's approval.
+**Where the merge stands.** Every update to the owner about a unit's pull request ends with it, as
+the shared `CLAUDE.md` says (*PR updates*): "Merge waits on ...", naming what is still to come of
+the list above, or "Merge is yours."
 
 ## What comes up mid-work
 
