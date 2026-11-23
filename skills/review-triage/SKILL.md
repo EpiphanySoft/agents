@@ -52,6 +52,61 @@ proven (its tests, its containers and VMs, its commit and push rules); this skil
 A finding is work, so it never carries `question`. What waits on the owner is the open issues with
 any of the three labels.
 
+## How it runs
+
+The skill runs in the **coordinating session**, never as a sub-agent of one. The walk thrus with the
+owner, the scheduling across units and the sweep's state from day to day are the coordinator's, and
+a choice that is the owner's never goes to an agent (the shared `CLAUDE.md`). So this skill's own
+header sets no `context: fork`, no `model` and no `effort`: it runs inline, on the session's model.
+
+Its **pieces** are separate contexts, each started with a short prompt that names the sweep, the
+piece, its model and effort, and this skill:
+
+| Piece | Reads | Writes |
+|---|---|---|
+| **a sort piece** | at most about 40 findings of one area step, from `triage/findings.json`, and the code they cite | `triage/sort-<step>.jsonl`, with `-<k>` when a step is split |
+| **the checker** | the High and Med findings alone, blind to the sort | `triage/check.jsonl`: its readiness for each |
+| **a unit** | its entry in the schedule, its findings' issues, the project's rules for a fix | its branch and its pull request |
+| **a `pr-review` pass** | as that skill says | as that skill says |
+
+```
+Triage of CR4 (review/4/triage/ on the local code-review-4 branch), with the review-triage skill:
+sort the findings of step CR4.3, the first 40, on <model> at <effort>. Start from the review's log.md.
+```
+
+```
+CR4's schedule (docs/remediation/CR4-schedule.json), with the review-triage skill:
+run the unit U07 from <the target branch, or the unit it starts on>, on <model> at <effort>.
+```
+
+Sort pieces run several at once, within the project's machine limits; units as *What can start*
+allows. Each piece is checked for a refusal or a model change when it ends, as the `review` skill
+says, before its work is taken.
+
+## Models and effort
+
+Each piece runs on a named model and a named effort, never a tool's default, as the `review` skill
+says. The proposal names today's models for that skill's three levels, **strongest**, **next** and
+**cheaper**, with the estimated tokens by model.
+
+- **The sort never runs on the cheaper model or below high effort.** A finding wrongly sorted as
+    ready is what stalls a unit later, so the sort is where the stronger model is spent.
+- **The checker never runs on the sorter's model.** Where they differ the finding is the owner's
+    choice, so a checker that is wrong costs the owner a minute, and no unit stalls.
+- **A unit's `pr-review` pass never runs on the unit's model.**
+
+| Piece | Standard | Plus |
+|---|---|---|
+| Coordinating: the walk thru's items, batching, ordering, scheduling as it runs | next, high | strongest, high |
+| Sort | next, high | strongest, high |
+| Checker of High and Med readiness | cheaper, high | next, high |
+| A unit's fixes | next, high | strongest, high |
+| A unit that holds a High finding or changes sensitive code | strongest, high | strongest, high |
+| The `pr-review` pass | that skill's table, on a model other than the unit's | the same |
+
+Recommend **Standard** by default, and **Plus** for a project's first sweep or one heavy in sensitive
+code. Any piece can be adjusted in the proposal.
+
 # Part 1: Triage
 
 Triage runs in six stages: **Gather**, **Sort**, **The owner's choices**, **Batch**, **Order** and
@@ -59,8 +114,9 @@ Triage runs in six stages: **Gather**, **Sort**, **The owner's choices**, **Batc
 review's local branch; only the approved schedule goes to the target branch. Each session's line
 goes in the review's `log.md`.
 
-Before it starts, the coordinator proposes how the sort will run: its pieces, the model and effort
-of each, and an estimate in tokens, as a review's proposal does. The owner's answer goes in `log.md`.
+Before it starts, the coordinator proposes how the sort will run: its pieces, the level (*Models
+and effort*) with today's model and effort for each, and an estimate in tokens, as a review's
+proposal does. The owner's answer goes in `log.md`.
 
 ## Gather
 
@@ -91,12 +147,12 @@ Each finding gets a record:
     skill's rule for running little. One that needs more stays a `check`, and is the first thing its
     unit does.
 
-**The pieces.** One piece sorts each area step's findings, reading them whole, with the code they
-cite where a file list needs it. A **checker** on a different model then judges the readiness of every
-High and Med finding again, from the finding alone and blind to the sorter's reasons: a finding
-wrongly sorted as ready is what stalls a unit later. Where they differ, the finding is a `choice`.
-Each piece writes `triage/sort-<step>.jsonl` as it goes, and is checked for a refusal or a model
-change as the `review` skill says.
+**The pieces.** One piece sorts each area step's findings, at most about 40 a piece (a larger step
+is split), reading them whole, with the code they cite where a file list needs it. A **checker** on
+a different model then judges the readiness of every High and Med finding again, from the finding
+alone and blind to the sorter's reasons: a finding wrongly sorted as ready is what stalls a unit
+later. Where they differ, the finding is a `choice`. Each piece writes its file as it goes (*How it
+runs*).
 
 ## The owner's choices
 
