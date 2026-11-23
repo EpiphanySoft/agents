@@ -121,9 +121,11 @@ proposal does. The owner's answer goes in `log.md`.
 ## Gather
 
 `triage.py gather` reads the sweep's issues from GitHub and writes its open findings to
-`triage/findings.json`: each one's number, title, severity, area, step, labels and whole body. The
-issues are the record: a finding closed, decided or filed since the review is read as it now stands.
-The anchor, the steps and their parts, and question issues are no findings.
+`triage/findings.json`: each one's number, its id in the review's work pad (by which other findings
+name it), title, severity, area, step, labels, whole body, and the comments of the project's owners,
+members and collaborators, where a decision is recorded. The issues are the record: a finding
+closed, decided or filed since the review is read as it now stands. The anchor, the steps and their
+parts, and question issues are no findings.
 
 ## Sort
 
@@ -132,27 +134,59 @@ Each finding gets a record:
 | Part | What |
 |---|---|
 | **readiness** | `ready`: the remedy is clear and nothing in it is the owner's to choose. `choice`: it needs the owner's decision, written as a walk-thru item (the question, the options, the recommendation). `check`: it can't be sorted until a fact is known, such as whether it reproduces. `not now`: proposed as later work or as not planned, with the reason. |
-| **files** | every file its fix changes: code, tests, requirement sections, shared test data |
+| **files** | every file its fix changes: code, tests, requirement sections, shared test data. Where a unit could extend either of two test files, the likelier one: the guard names what the list missed. |
 | **depends on** | the findings that must be fixed first, and those the same change fixes |
-| **size** | small, medium or large |
-| **proof** | what proving the fix needs: a test, a container, a VM |
+| **related** | the findings that change the same function or turn on the same rule, with neither having to come first: batched together where they fit, and asked together where they are choices |
+| **size** | small: one or two files and a test. medium: several files, or a proof that needs a container or a VM. large: a feature, or a change across a module. |
+| **proof** | what proving the fix needs: the test and its case, a container, a VM. For a document correction, the project's document checks. |
+
+A piece writes one JSON object a line, as it goes: the record as the schedule keeps it
+([`schedule.schema.json`](schedule.schema.json), an item of `findings`: `finding`, `readiness`,
+`files`, `depends_on`, `size`, `proof`, `note`), and beside it, for what the owner will be asked:
+
+- for a `choice`, `ask`: its `question`, its `options` (two or more, each an `option` and what it
+    `means`) and its `recommendation`, the sorter's own pick with the reason, most often the
+    finding's remedy;
+- for a `not now`, and for a check that showed no defect, `why`.
+
+A choice's `files`, `size` and `proof` are those of the recommended option, and its `note` says what
+the other options would change. The coordinator rewrites the record once the owner has decided.
 
 - **In doubt, it is the owner's.** When the sorter can't tell whether a choice is the owner's or the
     implementer's, the finding is a `choice`. A question asked up front costs the owner a minute; one
     found mid-work stalls a unit.
-- **A choice is the owner's** when the remedies differ in what the user sees or in what a
-    requirement says, or when the finding asks whether to build, write down or remove something. A
+- **Judged from the stated remedy.** Nearly every finding lists alternatives, and that alone makes
+    none of them a choice. A finding is `ready` when its stated remedy leaves what the requirements
+    say and what the user sees in ordinary use as they are, even when a listed alternative
+    wouldn't: the unit takes the remedy, and taking such an alternative later is a `refine`. A
     choice between two ways to get the same behaviour is the implementer's.
-- **A check** that one test or one command settles is made during the sort, under the `review`
-    skill's rule for running little. One that needs more stays a `check`, and is the first thing its
-    unit does.
+- **A choice is the owner's** when the stated remedy itself changes what the user sees or what a
+    requirement says; when the finding gives no remedy it prefers, or says in its own words that
+    the choice is the owner's; when it waits on a question issue that is still open; or when it
+    asks whether to build, write down or remove something. That last one is a `choice` even when
+    the likely answer is "later": taking the text out of the requirements is a change made now.
+- **Decided is ready.** A finding that carries the owner's decision, in its body or in a comment,
+    is sorted with that decision as its remedy.
+- **`not now`** is the sorter's own proposal that nothing be done in this sweep, and that nothing
+    needs changing for that to hold.
+- **A check** is a fact that decides the sort: whether it is a defect at all, or which remedy
+    applies. A part of the claim that was never run, and that doesn't change the remedy, is no
+    check: the unit's proof covers it. A check that one test or one command settles is made during
+    the sort, under the `review` skill's rule for running little (the proposal says whether the
+    sort runs attended). One that needs more stays a `check`, and is the first thing its unit does.
 
 **The pieces.** One piece sorts each area step's findings, at most about 40 a piece (a larger step
 is split), reading them whole, with the code they cite where a file list needs it. A **checker** on
 a different model then judges the readiness of every High and Med finding again, from the finding
 alone and blind to the sorter's reasons: a finding wrongly sorted as ready is what stalls a unit
-later. Where they differ, the finding is a `choice`. Each piece writes its file as it goes (*How it
-runs*).
+later. It reads each finding whole, takes what the finding says was run as run, judges neither the
+severity nor the files, and writes one line a finding: `finding`, its `readiness` (any of the four)
+and a `note` of one sentence. The coordinator compares the two: where they differ in any way, the
+finding is a `choice`.
+
+A piece writes only its own file, as it goes (*How it runs*). It reads and writes nothing on GitHub,
+labels nothing and commits nothing: the coordinator checks its file, writes the line in `log.md`
+and commits.
 
 ## The owner's choices
 
@@ -163,10 +197,11 @@ The schedule is only as stable as the decisions under it.
 - **Grouped.** Choices that turn on the same rule are one item, so one answer settles several
     findings. Small choices on Low findings (change the code or change the wording) come as one
     list with the recommended pick for each. The owner can split any item.
-- **Labelled while they wait.** A finding sorted as a `choice` gets the `refine` label when the sort
-    ends, so the repository shows what waits on the owner.
+- **Labelled while they wait.** When the sort ends the coordinator gives each finding sorted as a
+    `choice` the `refine` label, so the repository shows what waits on the owner.
 - **Recorded.** After the walk thru's final approval, each decision goes on its finding as a
-    comment and the `refine` label comes off. A finding the owner sets aside for later goes to the
+    comment, the `refine` label comes off, and the coordinator rewrites the finding's record as
+    `ready` with the files, size and proof of what was decided. A finding the owner sets aside for later goes to the
     project's later work; one that is no defect gets `dismiss` and is the owner's to close.
 
 ## Batch

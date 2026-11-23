@@ -13,7 +13,8 @@ one schedule file the project holds. The schedule is the project's `schedule` pa
 docs/remediation/<sweep>-schedule.json by default), checked against schedule.schema.json.
 
 `gather` writes the sweep's open findings, read from their issues, to <pad>/triage/findings.json:
-what the sort reads. `check` checks a schedule: against the schema, against itself (a finding in one
+what the sort reads, each with its body and the comments of the project's owners, members and
+collaborators, where a decision is recorded. `check` checks a schedule: against the schema, against itself (a finding in one
 unit only, each with its record, a unit's files holding its findings' files, a dependency on an
 earlier unit, no unit over the project's unit_size without its reason) and, unless --offline, against
 GitHub (every open finding in a unit or set aside). `next` says, for each unit in order, whether it
@@ -53,7 +54,8 @@ SEVERITIES = ("High", "Med", "Low")
 ISSUES_QUERY = """query($owner: String!, $name: String!, $label: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
     issues(first: 100, after: $endCursor, labels: [$label]) {
-      nodes { number title body state parent { number } labels(first: 100) { nodes { name } } }
+      nodes { number title body state parent { number } labels(first: 100) { nodes { name } }
+              comments(first: 100) { nodes { body authorAssociation } } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -104,14 +106,18 @@ def sweep_issues(config):
                  f"gh api graphql (the issues labelled {label})")
     return [{"number": n["number"], "title": n["title"], "body": n.get("body") or "",
              "state": n["state"].lower(), "parent": (n.get("parent") or {}).get("number"),
-             "labels": [x["name"] for x in n["labels"]["nodes"]]}
+             "labels": [x["name"] for x in n["labels"]["nodes"]],
+             # A decision is a comment: only those of the project's own people are read.
+             "comments": [c["body"] for c in (n.get("comments") or {}).get("nodes", [])
+                          if c.get("authorAssociation") in fr.TRUSTED]}
             for page in fr.json_values(out) for n in page["data"]["repository"]["issues"]["nodes"]]
 
 
 def findings_of(config, issues):
     """The sweep's findings among its issues: every one that is not the anchor, a step or a part
     of one, or a question issue. Each gets its severity (its body's first line), its area (its area
-    label) and its step (the step it sits below, at any depth)."""
+    label), its step (the step it sits below, at any depth) and its id in the review's work pad
+    (its marker's), by which other findings name it."""
     name = fr.review_name(config)
     roots = [i for i in issues if i["parent"] is None
              and any(m.group(1) == name and m.group(2) == "anchor"
@@ -135,8 +141,11 @@ def findings_of(config, issues):
             at = by_number.get(at["parent"])
         m = SEVERITY.match(i["body"])
         areas = [x[len(prefix):] for x in i["labels"] if x.startswith(prefix)]
+        ids = [k.group(2) for k in fr.MARKER.finditer(i["body"])
+               if k.group(1) == name and k.group(2) not in fr.PLAN_KEYS]
         out.append(dict(i, severity=m.group(1) if m else None, area=areas[0] if areas else None,
-                        step=at["parent"] if at and at["parent"] in steps else None))
+                        step=at["parent"] if at and at["parent"] in steps else None,
+                        id=ids[0] if ids else None))
     return sorted(out, key=lambda f: f["number"])
 
 
@@ -168,7 +177,7 @@ def cmd_gather(config, pad):
     findings = [f for f in findings_of(config, sweep_issues(config)) if f["state"] == "open"]
     folder = pad / "triage"
     folder.mkdir(exist_ok=True)
-    keep = ("number", "title", "severity", "area", "step", "labels", "body")
+    keep = ("number", "id", "title", "severity", "area", "step", "labels", "body", "comments")
     (folder / FINDINGS_FILE).write_text(
         json.dumps([{k: f[k] for k in keep} for f in findings], indent=1) + "\n", encoding="utf-8")
     counts = ", ".join(f"{sum(1 for f in findings if f['severity'] == s)} {s}" for s in SEVERITIES)

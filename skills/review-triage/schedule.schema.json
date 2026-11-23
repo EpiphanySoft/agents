@@ -91,9 +91,16 @@
             "uniqueItems": true,
             "description": "Optional. The findings that must be fixed before it, or that the same change fixes."
           },
+          "related": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1},
+            "uniqueItems": true,
+            "description": "Optional. The findings that change the same function or turn on the same rule, without one having to come first: they are batched together where they fit, and asked together where they are choices."
+          },
           "size": {
             "type": "string",
-            "enum": ["small", "medium", "large"]
+            "enum": ["small", "medium", "large"],
+            "description": "small: one or two files and a test. medium: several files, or a proof that needs a container or a VM. large: a feature, or a change across a module."
           },
           "proof": {
             "type": "string",
