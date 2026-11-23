@@ -201,8 +201,9 @@ The schedule is only as stable as the decisions under it.
     `choice` the `refine` label, so the repository shows what waits on the owner.
 - **Recorded.** After the walk thru's final approval, each decision goes on its finding as a
     comment, the `refine` label comes off, and the coordinator rewrites the finding's record as
-    `ready` with the files, size and proof of what was decided. A finding the owner sets aside for later goes to the
-    project's later work; one that is no defect gets `dismiss` and is the owner's to close.
+    `ready` with the files, size and proof of what was decided. A finding the owner sets aside
+    for later goes to the project's later work; one that is no defect gets `dismiss` and is the
+    owner's to close.
 
 ## Batch
 
