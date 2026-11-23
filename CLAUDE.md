@@ -141,6 +141,16 @@ Only after confirm passes, in this order:
 7. Update memory and handoff notes that call the PR open or pending: merged, with its squash commit.
     Don't close or edit issues on GitHub; say which ones look ready to close.
 
+# PR updates
+
+Every update to me about an open PR ends with where its merge stands, as its last line:
+
+- `Merge waits on ...`, naming each thing still in front of my pressing merge (a CI run, an answer
+    from me, a fix, a sign-off), in the order it will happen.
+- `Merge is yours.` when nothing is left but my approving the PR and merging it.
+
+With several PRs open, one line each, named by number.
+
 # Message timestamps
 
 A hook in `$CLAUDE_CONFIG_DIR/settings.json` adds `Now (Chicago): Oct 29, 8:10 AM` after every prompt
