@@ -312,8 +312,8 @@ A claim's **confirmations** count the independent contexts that found it holds:
 - **rejected** drops it.
 
 A filed finding's **status** is its issue's: open; open with the question label, a choice for the
-owner; closed as completed, by the pull request that fixed it; closed as not planned, by the owner,
-with the reason. Confirmations and decisions after filing are comments on its issue.
+owner, until the owner decides (*The owner's questions*, "Once answered"); closed as completed, by
+the pull request that fixed it; closed as not planned, by the owner, with the reason. Confirmations and decisions after filing are comments on its issue.
 
 ## The owner's questions
 
@@ -330,6 +330,23 @@ with the reason. Confirmations and decisions after filing are comments on its is
 - **No unit waits.** A unit whose judgement hangs on an open question reviews under each reading and
     tags its claims with the question. Once the owner decides, the rejected reading's claims are
     dropped, recorded as rejected with the decision as the reason.
+- **Once answered.** A question doesn't stay a question. When the walk thru's final approval is
+    given, every issue with the question label that it decided (a question issue, or a finding filed
+    as a choice for the owner) gets the decision as a comment, loses the question label, and takes
+    one of two ends. The walk thru's summary names the end of each, so the approval covers it:
+    - **Closed**, when the answer ends it: nothing follows from it, or everything that follows is
+        another issue's already. A question answered before the findings are posted usually ends
+        this way: its surviving claims are filed as findings that carry the decision as their agreed
+        resolution, and it is closed once they are filed. Its closing comment links what holds the
+        answer. It is closed as completed, and the approval is the owner's ask to close it.
+    - **The work itself**, when the answer is something to do and no other issue holds it. It
+        stays open, retitled for the work in place of the question, its leading id kept, and is a
+        finding from then on: the decision's comment gives its severity, and its fix closes it.
+- **What an answer opens.** An answer can call for more work than one issue holds. Work that
+    follows directly from the answer and belongs to the issue's area is filed as that issue's
+    sub-issue, with the sweep label and the area label and a plain title, and the issue stays open
+    as their parent. Work that belongs elsewhere is a new issue where it belongs: under another
+    area's step, or in the project's gaps or later work. The decision's comment links each.
 - **Kept private.** A question about a claim that would be exploitable if public (its id is in
     `exploitable.json`) is never filed publicly: `question` keeps it in `questions.md`, and the issue it
     files says only that one is waiting, without its content or its area, under the anchor.
@@ -560,13 +577,17 @@ on the claim. Whoever takes it up does this first, and it adds one. The steps:
 2. **Each confirmation or decision goes on its issue** as a comment. The only edit to a body after
     filing is a severity the owner changed in a walk thru, written as part of carrying out that
     decision.
-3. **A quick review can be checked later**: a Confirmation pass over its claims raises their
+3. **No answered question keeps its label.** Each one is closed, or becomes the work, with what it
+    opens filed where it belongs (*The owner's questions*, "Once answered"). The one edit to a
+    title after filing is that of a question that became the work.
+4. **A quick review can be checked later**: a Confirmation pass over its claims raises their
     confirmations, and its summary then reads "quick, checked later".
-4. **A recommendation nobody takes up** gets an id in the project's gaps, questions or later work, so
+5. **A recommendation nobody takes up** gets an id in the project's gaps, questions or later work, so
     it isn't lost when the next review starts.
 
 **Issues are the owner's to close.** Agents never close an issue unless the owner explicitly asks,
-for that review. **"Closes #n" is the link to a fix**: a pull request that fixes a finding names it
+for that review. A walk thru's approved summary that marks an answered question as closed is that
+ask, for that question. **"Closes #n" is the link to a fix**: a pull request that fixes a finding names it
 so, and needs no other line in its body for it; its close on the owner's merge is fine. A pull
 request for a sweep's issues carries the sweep label. Agents comment: confirmations, decisions,
 "PR #n opened" (for people reading the issue), "merged as <sha>". A page that would read "pull request" or
