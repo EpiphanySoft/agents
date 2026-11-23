@@ -5,6 +5,7 @@ as a comment on the anchor; lay out the review's sweep first; and post a pull re
 passes. See filing.md beside this script.
 
     file_review.py plan [--dry-run] [--sweep CR1] [--config docs/review.json]
+    file_review.py split <area> <parts> [--dry-run] [--sweep CR1] [--config docs/review.json]
     file_review.py dry-run [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
     file_review.py post    [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
     file_review.py question <question.json> [--sweep CR1] [--config ...] [--pad review/<N>]
@@ -15,7 +16,10 @@ passes. See filing.md beside this script.
 The review is <prefix><N> (CR1): named by --sweep, or by the branch code-review-<N> it runs on.
 `plan`, Planning's first step, makes the next sweep's label sweep:<prefix><N+1>, its anchor issue and one
 step per area as the anchor's sub-issues, each found again by its marker, so a run that stopped
-finishes rather than repeats; --dry-run says what it would make. `dry-run` writes the whole plan to
+finishes rather than repeats; --dry-run says what it would make. `split` cuts an area's step into
+<parts> parts, since a parent takes 100 sub-issues: it makes the parts that are missing as the
+anchor's sub-issues, each after the part before it, and titles them all alike, ending "(1 of 2)",
+"(2 of 2)"; run again, it finishes rather than repeats. `dry-run` writes the whole plan to
 <pad>/filing-dry-run.md, each finding's parent and numbered title included, and posts nothing.
 `post` posts exactly that plan through the gh CLI: each finding is filed, then attached under its
 parent, both kept in <pad>/filing-state.json so a run that stopped does only what is missing; the
@@ -30,8 +34,9 @@ question for the owner. `respond` posts the author's round, <pad>/round-<k>.json
 reviewers' threads and one comment on the pull request, refusing any commit not on the pull
 request's branch, keeping <pad>/respond-state.json. The `pr` and `respond` commands, and the
 summary's lookup on the anchor, read only the comments of the project's owners, members and
-collaborators. It never closes or edits an issue, never makes a parent outside `plan`, and never
-resolves, approves or requests changes. Python 3 standard library only.
+collaborators. It never closes an issue, edits one only to retitle a step's parts in `split`, never
+makes a parent outside `plan` and `split`, and never resolves, approves or requests changes. Python 3
+standard library only.
 
 Exit status: 0 done; 1 a text check, a parent search or a gh call failed (what was posted is kept; a
 question is kept in questions.md); 2 refused (a bad config or input, or a plan that doesn't match the
@@ -298,6 +303,11 @@ OPEN_ISSUES_QUERY = """query($owner: String!, $name: String!, $label: String!, $
 
 PLAN_KEYS = ("anchor", "summary")
 
+# A parent takes this many sub-issues and no more: GitHub's limit.
+MAX_SUBS = 100
+# The end of a part's title: " (2 of 3)".
+PART_SUFFIX = re.compile(r"\s*\(([1-9][0-9]*) of ([1-9][0-9]*)\)$")
+
 
 def is_finding(body):
     """Whether an issue's body carries a finding's marker (a review's finding or question, or a
@@ -305,6 +315,13 @@ def is_finding(body):
     step's are not a finding's."""
     return any(m.group(2) not in PLAN_KEYS for m in MARKER.finditer(body)) or \
         any(m.group(2).endswith(" issue") for m in PR_MARKER.finditer(body))
+
+
+def is_step(body):
+    """Whether an issue's body carries a step's marker or a part's: one made and not yet attached
+    under the anchor is no second anchor."""
+    return any(m.group(2) != "anchor" for m in PLAN_MARKER.finditer(body)) or \
+        bool(PART_MARKER.search(body))
 
 
 def step_id(title, name):
@@ -317,8 +334,10 @@ def step_id(title, name):
 
 class Sweep:
     """A sweep's issues, read once a run. Its anchor is the one open issue with the sweep label, no
-    parent and no finding's marker; its steps are the anchor's open sub-issues that are no finding.
-    The script never makes a parent outside `plan`."""
+    parent and no marker of a finding or a step; its steps are the anchor's open sub-issues that
+    are no finding.
+    An area has one step, in one part or, once `split` has cut it, several. The script never makes
+    a parent outside `plan` and `split`."""
 
     def __init__(self, config, label):
         self.config, self.label = config, label
@@ -330,33 +349,85 @@ class Sweep:
         anchors = [{"number": node["number"], "title": node["title"]}
                    for page in json_values(out)
                    for node in page["data"]["repository"]["issues"]["nodes"]
-                   if not node.get("parent") and not is_finding(node.get("body") or "")]
+                   if not node.get("parent") and not is_finding(node.get("body") or "")
+                   and not is_step(node.get("body") or "")]
         if len(anchors) != 1:
             found = ", ".join(f"#{a['number']}" for a in anchors)
             raise Refused(f"the sweep {label} has {len(anchors)} open issues with no parent "
                           f"and no finding's marker{' (' + found + ')' if found else ''}: it needs "
                           "one, its anchor, which Planning makes (file_review.py plan)")
         self.anchor = anchors[0]
-        self._subs = {}
+        self._subs, self._held, self._placed, self.short = {}, {}, {}, {}
         self.steps = [s for s in self.sub_issues(self.anchor["number"])
                       if s["state"] == "open" and not is_finding(s["body"])]
 
-    def parent(self, area):
-        """(issue, None), or (None, why) when the search fails. A finding no area owns goes under
-        the anchor."""
-        if area is None:
-            return self.anchor, None
+    def parts(self, area):
+        """(the open parts of the area's step, in their order, None), or (None, why). A step is one
+        issue until `split` cuts it: its parts are then titled alike but for their ends, "(1 of
+        2)", "(2 of 2)". Any other two issues for an area fail the search."""
         label = self.config["area_prefix"] + area
         matches = [s for s in self.steps if label in s["labels"]]
         if len(matches) == 1:
-            return matches[0], None
+            return matches, None
         anchor = f"#{self.anchor['number']}"
         if not matches:
             return None, (f"area {area}: no open sub-issue of the anchor {anchor} is labelled "
                           f"{label}; Planning makes the steps")
+        ends = [PART_SUFFIX.search(s["title"]) for s in matches]
+        if all(ends) and len({(s["title"][:m.start()], m.group(2))
+                              for s, m in zip(matches, ends)}) == 1 \
+                and len({m.group(1) for m in ends}) == len(matches):
+            return [s for _, s in sorted(zip((int(m.group(1)) for m in ends), matches),
+                                         key=lambda pair: pair[0])], None
         return None, (f"area {area}: {len(matches)} open sub-issues of the anchor {anchor} are "
                       "labelled " + label + " (" + ", ".join(f"#{i['number']}" for i in matches)
-                      + "); an area has one step")
+                      + "), and they are not one step's parts, titled alike and ending \"(1 of "
+                      "2)\", \"(2 of 2)\"; an area has one step, and `file_review.py split` "
+                      "makes its parts, or finishes them")
+
+    def held(self, number, keys):
+        """The keys the bodies of the parent's sub-issues name, by keys(body)."""
+        if (number, keys) not in self._held:
+            self._held[number, keys] = {k for s in self.sub_issues(number) for k in keys(s["body"])}
+        return self._held[number, keys]
+
+    def parent(self, area, item=None, keys=None):
+        """(issue, None), or (None, why) when the search fails. A finding no area owns goes under
+        the anchor. Of a step's parts, the parent is the one that holds the item already (item: its
+        key; keys(body): the keys a sub-issue's body names), else the first with room for one more
+        sub-issue, what this run placed there counted. So a run after a stop places each item
+        where the run before did."""
+        if area is None:
+            parts = [self.anchor]
+        else:
+            parts, why = self.parts(area)
+            if why:
+                return None, why
+        if item is not None and keys is not None:
+            for part in parts:
+                if item in self.held(part["number"], keys):
+                    return part, None
+        for part in parts:
+            n = part["number"]
+            if len(self.sub_issues(n)) + self._placed.get(n, 0) < MAX_SUBS:
+                self._placed[n] = self._placed.get(n, 0) + 1
+                return part, None
+        self.short[area] = self.short.get(area, 0) + 1
+        return None, self.no_room(area)
+
+    def no_room(self, area):
+        """Why an item of the area has no parent, with the split that makes room for every item
+        this run found none for."""
+        if area is None:
+            return (f"the anchor #{self.anchor['number']} has no room: a parent takes {MAX_SUBS} "
+                    "sub-issues, and an anchor is not split")
+        parts, _ = self.parts(area)
+        end = PART_SUFFIX.search(parts[0]["title"])
+        total = int(end.group(2)) if end else 1
+        need = total + -(-self.short.get(area, 1) // MAX_SUBS)
+        return (f"area {area}: no room in its step ("
+                + ", ".join(f"#{p['number']}" for p in parts) + f"): a parent takes {MAX_SUBS} "
+                f"sub-issues; `file_review.py split {area} {need}` makes the room")
 
     def sub_issues(self, number):
         """The parent's sub-issues in every state, read once a run."""
@@ -366,23 +437,25 @@ class Sweep:
 
     def titles(self, entries, own):
         """entries: (key, parent or None, sentence), in filing order. The title is "<step id>-<m>
-        <sentence>", m numbering on from the highest among the parent's sub-issues, those whose
-        body own(body) says are these entries' (filed by an earlier run) left out; a parent title
-        with no leading id, or no parent, gives the plain sentence. {key: title}."""
+        <sentence>", m numbering on from the highest among the sub-issues of the parent and of
+        the step's other parts (they share its id, so one run of numbers crosses them), those
+        whose body own(body) says are these entries' (filed by an earlier run) left out; a parent
+        title with no leading id, or no parent, gives the plain sentence. {key: title}."""
         next_m, titles = {}, {}
         for key, parent, sentence in entries:
             sid = step_id(parent["title"], self.name) if parent else None
             if sid is None:
                 titles[key] = sentence
                 continue
-            n = parent["number"]
-            if n not in next_m:
+            if sid not in next_m:
                 pattern = re.compile(rf"^{re.escape(sid)}-([0-9]+)(?=\s|$)")
-                found = [int(m.group(1)) for s in self.sub_issues(n) if not own(s["body"])
-                         for m in [pattern.match(s["title"])] if m]
-                next_m[n] = max(found, default=0) + 1
-            titles[key] = f"{sid}-{next_m[n]} {sentence}"
-            next_m[n] += 1
+                numbers = {parent["number"]} | {s["number"] for s in self.steps
+                                                if step_id(s["title"], self.name) == sid}
+                found = [int(m.group(1)) for n in sorted(numbers) for s in self.sub_issues(n)
+                         if not own(s["body"]) for m in [pattern.match(s["title"])] if m]
+                next_m[sid] = max(found, default=0) + 1
+            titles[key] = f"{sid}-{next_m[sid]} {sentence}"
+            next_m[sid] += 1
         return titles
 
 
@@ -390,8 +463,9 @@ def sub_issues(config, number):
     out = run(["gh", "api", "--paginate",
                f"repos/{config['repo']}/issues/{number}/sub_issues?per_page=100"],
               f"gh api issues/{number}/sub_issues (list)")
-    return [{"number": i["number"], "title": i["title"], "body": i.get("body") or "",
-             "state": i.get("state", "open"), "labels": [x["name"] for x in i.get("labels", [])]}
+    return [{"number": i["number"], "id": i.get("id"), "title": i["title"],
+             "body": i.get("body") or "", "state": i.get("state", "open"),
+             "labels": [x["name"] for x in i.get("labels", [])]}
             for page in json_values(out) for i in page]
 
 
@@ -582,6 +656,7 @@ def build_plan(config, pad):
     sweep = Sweep(config, sweep_label(config))
     sweep_record = {"label": sweep.label, "anchor": sweep.anchor["number"]}
     items, entries, failures = [], [], []
+    keys = review_keys(config)
     for f in findings:
         check_area(f, areas, FINDINGS_FILE)
         body = finding_body(config, f)
@@ -595,17 +670,20 @@ def build_plan(config, pad):
                           "labels": [], "severity": SEVERITY_FOR_ADVISORY[f["severity"]],
                           "parent": None, "mark": mark, "finding": f})
             continue
-        parent, why = sweep.parent(f["area"])
+        parent, why = sweep.parent(f["area"], f["id"], keys)
         if why:
-            failures.append(f"{f['id']}: {why}")
+            failures.append((f["id"], f["area"], why))
         entries.append((f["id"], parent, f["title"]))
         items.append({"id": f["id"], "type": "issue", "title": f["title"], "body": body,
                       "labels": issue_labels(config, f, sweep_record["label"]),
                       "parent": parent["number"] if parent else None,
                       "parent_title": parent["title"] if parent else None,
                       "mark": mark, "finding": f})
+    # Every finding with no room names the split that makes room for them all.
+    failures = [f"{fid}: {sweep.no_room(area) if area in sweep.short else why}"
+                for fid, area, why in failures]
     ids = {i["id"] for i in items}
-    titles = sweep.titles(entries, own_markers(review_keys(config), ids))
+    titles = sweep.titles(entries, own_markers(keys, ids))
     for item in items:
         item["title"] = titles.get(item["id"], item["title"])
     return {
@@ -669,7 +747,8 @@ def write_dry_run(config, pad, plan, failures):
         out += ["Parents: FAILED, so `post` refuses this plan:", ""] + \
             [f"- {why}" for why in plan["failures"]] + [""]
     else:
-        out += ["Parents: one found for every finding: its area's step, or the anchor.", ""]
+        out += ["Parents: one found for every finding: its area's step (of a step in parts, the "
+                "part with room), or the anchor.", ""]
     if "text_check" not in config:
         out.append("Text check: none configured.")
     elif failures:
@@ -1007,7 +1086,7 @@ def cmd_question(config, pad, path):
         if area is not None:
             labels.append(config["area_prefix"] + area)
         sweep = Sweep(config, sweep_label(config))
-        parent, why = sweep.parent(area)
+        parent, why = sweep.parent(area, key, review_keys(config))
         if why:
             raise Failed(f"no parent for the question's {why}")
         own = lambda b: key in review_keys(config)(b)
@@ -1404,14 +1483,14 @@ def cmd_pr_file(config, pad, n, chosen, every):
     # The sweep only through the pull request: its sweep label, the parent search, the title rule.
     label = pr_sweep(config, n) if any(kind == "issue" for _, kind, _ in items) else None
     sweep = Sweep(config, label) if label else None
-    entries, failures = [], []
+    entries, failures, held = [], [], pr_keys(n)
     for key, kind, i in items:
         if kind != "issue":
             continue
         i["labels"] = issue_labels(config, i.pop("finding"), label)
         parent = None
         if sweep:
-            parent, why = sweep.parent(ids[i["id"]][2]["area"])
+            parent, why = sweep.parent(ids[i["id"]][2]["area"], key, held)
             if why:
                 failures.append(f"{i['id']}: {why}")
         i["parent"] = parent["number"] if parent else None
@@ -1790,11 +1869,122 @@ def cmd_plan(config, given, dry, config_path="docs/review.json"):
     return 0
 
 
+# ---- a step in parts: split ----
+
+PART_MARKER = re.compile(r"<!-- review (\S+) part ([1-9][0-9]*) ([^<>]+?) -->")
+
+
+def cmd_split(config, area, total, dry):
+    """Cut the area's step into total parts: make the missing ones under the anchor, each placed
+    after the part before it, then title every part alike but for its end, "(k of total)". Each
+    part is found again by its marker (the step's own for the first), so a run that stopped is
+    finished by running it again."""
+    repo, name, label = config["repo"], review_name(config), sweep_label(config)
+    areas = list_areas(config)
+    if area not in areas:
+        raise Refused(f"split: {area!r} is not one of the project's areas "
+                      f"({', '.join(sorted(areas)) or 'none listed'})")
+    sweep = Sweep(config, label)
+    anchor = sweep.anchor["number"]
+    out = run(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "10000",
+               "--json", "number,url,body,title"], "gh issue list")
+    parts = {}
+    for issue in json.loads(out):
+        body = issue.get("body") or ""
+        for m in PLAN_MARKER.finditer(body):
+            if m.group(1) == name and m.group(2) == f"step {area}":
+                parts.setdefault(1, issue)
+        for m in PART_MARKER.finditer(body):
+            if m.group(1) == name and m.group(3) == area:
+                parts.setdefault(int(m.group(2)), issue)
+    if 1 not in parts:
+        raise Refused(f"split: {name} has no step for the area {area}; Planning makes the steps "
+                      "(file_review.py plan)")
+    if max(parts) > total:
+        raise Refused(f"split: the area {area} has {max(parts)} parts already (#"
+                      f"{parts[max(parts)]['number']} is the last); a part is never removed")
+    base = PART_SUFFIX.sub("", parts[1]["title"])
+    step = step_id(base, name) or base
+    labels = list(dict.fromkeys(list(config["labels"]) + [label, config["area_prefix"] + area]))
+    wanted = {k: f"{base} ({k} of {total})" for k in range(1, total + 1)}
+    bodies = {k: (f"Step {step} of code review {name}, part {k}: the area `{area}`. Its findings "
+                  "are this issue's sub-issues and those of the step's other parts, since a "
+                  f"parent takes {MAX_SUBS} sub-issues.\n\n"
+                  f"<!-- review {name} part {k} {area} -->\n")
+              for k in wanted if k not in parts}
+    failures = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for k, title in wanted.items():
+            if k in bodies or parts[k]["title"] != title:
+                result = text_check(config, Path(tmp), title, bodies.get(k, ""))
+                if result is not None:
+                    failures.append(title)
+                    print(f"text check failed for {title}:\n{result}", file=sys.stderr)
+    attached = sweep.sub_issues(anchor)
+    under = {s["number"] for s in attached}
+    for k, title in wanted.items():
+        if k in bodies:
+            state = "would be made" if dry else "to make"
+        else:
+            state = f"#{parts[k]['number']}"
+            if parts[k]["title"] != title:
+                state += f", now \"{parts[k]['title']}\"" + \
+                    (": would be retitled" if dry else ": to retitle")
+            if parts[k]["number"] not in under:
+                state += ", not yet a sub-issue of the anchor"
+        print(f"- {title} [{', '.join(labels)}]: {state}")
+    if dry:
+        return 1 if failures else 0
+    if failures:
+        raise Failed(f"text check failed for {', '.join(failures)}; nothing made")
+    resume = f"; run split {area} {total} again to finish it"
+    with tempfile.TemporaryDirectory() as tmp:
+        body_path = Path(tmp) / "body"
+        try:
+            for k in sorted(wanted):
+                if k in bodies:
+                    body_path.write_text(bodies[k], encoding="utf-8")
+                    parts[k] = dict(create_issue(repo, wanted[k], body_path, labels),
+                                    title=wanted[k])
+                    print(f"part {k}: {parts[k]['url']}")
+                if k > 1:
+                    attach(config, attached, anchor, parts[k], body_path)
+            # Each part after the first directly follows the part before it under the anchor.
+            order = sub_issues(config, anchor)
+            for k in sorted(wanted)[1:]:
+                at = {s["number"]: i for i, s in enumerate(order)}
+                here, before = at[parts[k]["number"]], at.get(parts[k - 1]["number"])
+                if before is None or here == before + 1:
+                    continue
+                body_path.write_text(json.dumps({"sub_issue_id": order[here]["id"],
+                                                 "after_id": order[before]["id"]}),
+                                     encoding="utf-8")
+                run(["gh", "api", "--method", "PATCH",
+                     f"repos/{repo}/issues/{anchor}/sub_issues/priority",
+                     "--input", str(body_path)],
+                    f"gh api issues/{anchor}/sub_issues/priority (#{parts[k]['number']})")
+                moved = order.pop(here)
+                order.insert(next(i for i, s in enumerate(order)
+                                  if s["number"] == parts[k - 1]["number"]) + 1, moved)
+                print(f"#{parts[k]['number']}: placed after #{parts[k - 1]['number']}")
+            for k in sorted(wanted):
+                if parts[k]["title"] != wanted[k]:
+                    run(["gh", "issue", "edit", str(parts[k]["number"]), "--repo", repo,
+                         "--title", wanted[k]], f"gh issue edit #{parts[k]['number']} (its title)")
+                    print(f"#{parts[k]['number']}: retitled {wanted[k]}")
+        except Failed as e:
+            raise Failed(f"{e}{resume}")
+    print(f"{name}: the area {area}'s step has {total} parts: "
+          + ", ".join(f"#{parts[k]['number']}" for k in sorted(wanted)))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("command",
-                        choices=["plan", "dry-run", "post", "question", "pr", "respond"])
+                        choices=["plan", "split", "dry-run", "post", "question", "pr", "respond"])
     parser.add_argument("args", nargs="*", help="question: the question's JSON file; "
+                        "split: the area, and how many parts its step is to have; "
                         "pr: post <n>, or file <n> and the ids to file; respond: <n>")
     parser.add_argument("--all", action="store_true",
                         help="pr file: every additional finding of the latest pass")
@@ -1805,14 +1995,14 @@ def main(argv=None):
     parser.add_argument("--sweep", help="the review, <prefix><N> such as CR1 (default: from the "
                         "branch code-review-<N>; for plan, the next sweep)")
     parser.add_argument("--dry-run", action="store_true", dest="plan_dry",
-                        help="plan: say what it would make, and make nothing")
+                        help="plan, split: say what it would make, and make nothing")
     args = parser.parse_args(argv)
     try:
         if args.all and (args.command != "pr" or args.args[:1] != ["file"]):
             raise Refused("--all is for pr file only")
         config = load_config(args.config)
-        if args.plan_dry and args.command != "plan":
-            raise Refused("--dry-run is for plan only; the filing's dry run is dry-run")
+        if args.plan_dry and args.command not in ("plan", "split"):
+            raise Refused("--dry-run is for plan and split only; the filing's dry run is dry-run")
         if args.sweep and args.command in ("pr", "respond"):
             raise Refused("--sweep is not for pr or respond: a pull request's sweep is its label")
         if args.command == "plan":
@@ -1844,6 +2034,12 @@ def main(argv=None):
             return cmd_pr_file(config, pad, n, rest, args.all)
         number = find_sweep(config, args.sweep)
         name_review(config, number)
+        if args.command == "split":
+            if len(args.args) != 2 or not re.fullmatch(r"[1-9][0-9]*", args.args[1]) \
+                    or int(args.args[1]) < 2:
+                raise Refused("split: <area> <parts>, the area and how many parts its step is to "
+                              "have, 2 or more")
+            return cmd_split(config, args.args[0], int(args.args[1]), args.plan_dry)
         pad = Path(args.pad or f"review/{number}")
         if not pad.is_dir():
             raise Refused(f"work pad {pad}: not a folder")

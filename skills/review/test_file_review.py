@@ -64,7 +64,16 @@ STUB_GH = textwrap.dedent("""\
         store.setdefault("labels", []).append(args[2])
         made()
     elif args[:2] == ["issue", "list"]:
-        print(json.dumps([{k: i[k] for k in ("number", "url", "body")} for i in store["issues"]]))
+        keys = value("--json").split(",")
+        print(json.dumps([{k: i[k] for k in keys} for i in store["issues"]]))
+    elif args[:2] == ["issue", "edit"]:
+        # Only a title is ever edited: split's retitling of a step's parts.
+        if args[3:5] != ["--repo", "owner/proj"] or args[5] != "--title" or len(args) != 7:
+            sys.stderr.write("stub gh: unexpected edit\\n")
+            sys.exit(3)
+        creating()
+        next(i for i in store["issues"] if i["number"] == int(args[2]))["title"] = args[6]
+        made()
     elif args[:2] == ["issue", "create"]:
         creating()
         n = max([100] + [i["number"] for i in store["issues"]]) + 1
@@ -88,7 +97,7 @@ STUB_GH = textwrap.dedent("""\
                 "nodes": page, "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}))
     elif args[:2] == ["api", "--paginate"] and re.search(r"/issues/\\d+/sub_issues\\?", args[2]):
         p = int(re.search(r"/issues/(\\d+)/", args[2]).group(1))
-        subs = [{"number": i["number"], "title": i["title"], "body": i["body"],
+        subs = [{"number": i["number"], "id": i["id"], "title": i["title"], "body": i["body"],
                  "state": i.get("state", "OPEN").lower(),
                  "labels": [{"name": x} for x in i["labels"]]}
                 for i in store["issues"] if i.get("parent") == p]
@@ -101,11 +110,29 @@ STUB_GH = textwrap.dedent("""\
         if child.get("parent"):
             sys.stderr.write("HTTP 422: the issue already has a parent\\n")
             sys.exit(1)
+        if sum(1 for i in store["issues"] if i.get("parent") == p) >= 100:
+            sys.stderr.write("HTTP 422: Parent cannot have more than 100 sub-issues\\n")
+            sys.exit(1)
         creating()
         child["parent"] = p
         made()
         print(json.dumps({"id": 7000 + p, "number": p,
                           "html_url": f"https://github.com/owner/proj/issues/{p}"}))
+    elif args[:3] == ["api", "--method", "PATCH"] and \\
+            re.search(r"/issues/\\d+/sub_issues/priority$", args[3]):
+        # A parent's sub-issues are listed in the store's order: the move is made there.
+        p = int(args[3].split("/")[-3])
+        payload = json.load(open(value("--input")))
+        child = next(i for i in store["issues"] if i["id"] == payload["sub_issue_id"])
+        after = next(i for i in store["issues"] if i["id"] == payload["after_id"])
+        if child.get("parent") != p or after.get("parent") != p:
+            sys.stderr.write("HTTP 404: not a sub-issue of the parent\\n")
+            sys.exit(1)
+        creating()
+        store["issues"].remove(child)
+        store["issues"].insert(store["issues"].index(after) + 1, child)
+        made()
+        print(json.dumps({"id": 7000 + p, "number": p}))
     elif args[0] == "api" and re.fullmatch(r"repos/owner/proj/issues/\\d+", args[1]):
         n = int(args[1].rsplit("/", 1)[1])
         issue = next((i for i in store["issues"] if i["number"] == n), None)
@@ -1103,6 +1130,279 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(done.returncode, 2)
         self.assertIn("no areas", done.stderr)
         self.assertEqual(self.made(), [])
+
+
+class SplitTest(unittest.TestCase):
+    """A step in parts: the limit of 100 sub-issues a parent takes, `split`, and filing across a
+    step's parts."""
+    setUp = FileReviewTest.setUp
+    tearDown = FileReviewTest.tearDown
+    run_script = FileReviewTest.run_script
+    calls = FileReviewTest.calls
+    store = FileReviewTest.store
+    state = FileReviewTest.state
+    write_inputs = FileReviewTest.write_inputs
+    seed_steps = FileReviewTest.seed_steps
+    seeded = FileReviewTest.seeded
+    write_store = FileReviewTest.write_store
+    edit_store = FileReviewTest.edit_store
+    posting_calls = FileReviewTest.posting_calls
+    dry_run_text = FileReviewTest.dry_run_text
+    ask = FileReviewTest.ask
+    questions_md = FileReviewTest.questions_md
+    QUESTION = FileReviewTest.QUESTION
+
+    def fill(self, held, parent=42):
+        """Give the parent sub-issues of another review until it holds `held` in all."""
+        def change(store):
+            have = sum(1 for i in store["issues"] if i.get("parent") == parent)
+            top = max(i["number"] for i in store["issues"])
+            for n in range(top + 1, top + 1 + held - have):
+                store["issues"].append({
+                    "number": n, "id": 7000 + n, "url": f"https://github.com/owner/proj/issues/{n}",
+                    "title": "An older finding.", "labels": ["area:core"], "state": "CLOSED",
+                    "parent": parent, "body": f"severity Low\n\n<!-- review CR0 F{n} -->\n"})
+        self.edit_store(change)
+
+    def issue(self, n):
+        return next(i for i in self.store()["issues"] if i["number"] == n)
+
+    def part(self, k, area="core"):
+        """The issue split made as the area's part k."""
+        found = [i for i in self.store()["issues"]
+                 if f"<!-- review CR1 part {k} {area} -->" in i["body"]]
+        self.assertEqual(len(found), 1, found)
+        return found[0]
+
+    def under(self, parent):
+        """The numbers of the parent's sub-issues, in their order."""
+        return [i["number"] for i in self.store()["issues"] if i.get("parent") == parent]
+
+    def making_calls(self):
+        return [c for c in self.calls() if c[:2] in (["issue", "create"], ["issue", "edit"])
+                or c[:2] == ["api", "--method"]]
+
+    def split(self, *args, **env):
+        return self.run_script("split", *args, **env)
+
+    def more_core(self, count):
+        self.findings += [finding(f"U02-{k}", f"Core finding {k}.") for k in range(1, count + 1)]
+        self.write_inputs()
+
+    # ---- the limit ----
+
+    def test_a_step_with_no_room_fails_the_dry_run_naming_the_split(self):
+        # #42 holds 99: one of the three core findings fits, and the two others have no parent.
+        self.fill(99)
+        self.more_core(2)
+        done = self.run_script("dry-run")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        why = ("area core: no room in its step (#42): a parent takes 100 sub-issues; "
+               "`file_review.py split core 2` makes the room")
+        self.assertIn(f"no parent for U02-1: {why}", done.stderr)
+        text = self.dry_run_text()
+        self.assertIn("Parents: FAILED, so `post` refuses this plan:", text)
+        self.assertEqual(text.count(f"- parent: FAILED: {why}"), 2)
+        self.assertIn("- title: CR1.1-3 A value on the limit is dropped.\n"
+                      "- labels: review, sweep:CR1, area:core\n- parent: #42 CR1.1 core\n", text)
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no parent for", done.stderr)
+        self.assertEqual(self.posting_calls(), [])
+
+    def test_the_split_named_makes_room_for_every_finding(self):
+        # A full step and 102 core findings: two more parts, so three in all.
+        del self.config["text_check"]
+        self.fill(100)
+        self.more_core(101)
+        done = self.run_script("dry-run")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("`file_review.py split core 3` makes the room", done.stderr)
+        self.assertEqual(self.split("core", "3").returncode, 0)
+        done = self.run_script("dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        text = self.dry_run_text()
+        two, three = self.part(2)["number"], self.part(3)["number"]
+        self.assertEqual(text.count("- parent: #42 "), 0)
+        self.assertEqual(text.count(f"- parent: #{two} CR1.1 core (2 of 3)\n"), 100)
+        self.assertEqual(text.count(f"- parent: #{three} CR1.1 core (3 of 3)\n"), 2)
+        self.assertIn("the part with room", text)
+
+    def test_the_anchor_is_never_split(self):
+        self.fill(100, parent=41)
+        self.findings[0]["area"] = None
+        self.write_inputs()
+        done = self.run_script("dry-run")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("U01-1: the anchor #41 has no room: a parent takes 100 sub-issues, and an "
+                      "anchor is not split", done.stderr)
+
+    # ---- split ----
+
+    def test_split_makes_the_part_after_the_first_and_retitles_both(self):
+        done = self.split("core", "2", "--dry-run")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.making_calls(), [])
+        self.assertIn('- CR1.1 core (1 of 2) [review, sweep:CR1, area:core]: #42, now '
+                      '"CR1.1 core": would be retitled\n', done.stdout)
+        self.assertIn("- CR1.1 core (2 of 2) [review, sweep:CR1, area:core]: would be made\n",
+                      done.stdout)
+        done = self.split("core", "2")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        two = self.part(2)
+        self.assertIn(f"CR1: the area core's step has 2 parts: #42, #{two['number']}", done.stdout)
+        self.assertEqual((two["title"], two["labels"], two["parent"], two["state"]),
+                         ("CR1.1 core (2 of 2)", ["review", "sweep:CR1", "area:core"], 41, "OPEN"))
+        self.assertTrue(two["body"].endswith("<!-- review CR1 part 2 core -->\n"))
+        self.assertEqual(self.issue(42)["title"], "CR1.1 core (1 of 2)")
+        self.assertEqual(self.issue(43)["title"], "CR1.2 docs")
+        # Under the anchor the new part follows the first, ahead of the next area's step.
+        self.assertEqual(self.under(41), [42, two["number"], 43, 47])
+        # The one edit is the first part's title.
+        edits = [c for c in self.calls() if c[:2] == ["issue", "edit"]]
+        self.assertEqual(edits, [["issue", "edit", "42", "--repo", "owner/proj", "--title",
+                                  "CR1.1 core (1 of 2)"]])
+        # Run again, it makes nothing: it is done.
+        before = len(self.making_calls())
+        done = self.split("core", "2")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(len(self.making_calls()), before)
+
+    def test_a_step_is_split_again_into_more_parts(self):
+        self.assertEqual(self.split("core", "2").returncode, 0)
+        done = self.split("core", "4")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        numbers = [42] + [self.part(k)["number"] for k in (2, 3, 4)]
+        self.assertEqual([self.issue(n)["title"] for n in numbers],
+                         [f"CR1.1 core ({k} of 4)" for k in (1, 2, 3, 4)])
+        self.assertEqual(self.under(41), numbers + [43, 47])
+        # A part is never removed.
+        done = self.split("core", "3")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn(f"the area core has 4 parts already (#{numbers[3]} is the last); a part is "
+                      "never removed", done.stderr)
+
+    def test_a_split_that_stopped_is_finished_by_running_it_again(self):
+        # Its four steps: the part made, attached under the anchor, placed, the first retitled.
+        for env in ({"STUB_FAIL_AT": "1"}, {"STUB_LOSE_AT": "1"}, {"STUB_FAIL_AT": "2"},
+                    {"STUB_LOSE_AT": "2"}, {"STUB_FAIL_AT": "3"}, {"STUB_FAIL_AT": "4"}):
+            self.seed_steps()
+            done = self.split("core", "2", **env)
+            self.assertEqual(done.returncode, 1, env)
+            self.assertIn("; run split core 2 again to finish it", done.stderr)
+            done = self.run_script("dry-run")
+            if env in ({"STUB_FAIL_AT": "1"}, {"STUB_LOSE_AT": "1"}, {"STUB_FAIL_AT": "2"}):
+                # The part is not made, or is under no parent yet: it is no second anchor, and
+                # the step is still whole.
+                self.assertEqual(done.returncode, 0, (env, done.stderr))
+                self.assertIn("- parent: #42 CR1.1 core\n", self.dry_run_text())
+            else:
+                # Under the anchor and half titled, the two are not yet one step's parts.
+                self.assertEqual(done.returncode, 1, (env, done.stderr))
+                self.assertIn(f"area core: 2 open sub-issues of the anchor #41 are labelled "
+                              f"area:core (#42, #{self.part(2)['number']}), and they are not one "
+                              "step's parts", self.dry_run_text(), env)
+            done = self.split("core", "2")
+            self.assertEqual(done.returncode, 0, (env, done.stderr))
+            two = self.part(2)  # one, never two
+            self.assertEqual(self.under(41), [42, two["number"], 43, 47], env)
+            self.assertEqual([self.issue(42)["title"], two["title"]],
+                             ["CR1.1 core (1 of 2)", "CR1.1 core (2 of 2)"], env)
+            self.assertEqual(self.run_script("dry-run").returncode, 0, env)
+
+    def test_split_refusals(self):
+        for args, needle in ((("core",), "split: <area> <parts>"),
+                             (("core", "1"), "2 or more"),
+                             (("core", "two"), "split: <area> <parts>"),
+                             (("ui", "2"), "'ui' is not one of the project's areas (core, docs)")):
+            done = self.split(*args)
+            self.assertEqual(done.returncode, 2, args)
+            self.assertIn(needle, done.stderr)
+        self.assertEqual(self.run_script("post", "--dry-run").returncode, 2)
+        # No step for the area: Planning makes it, never split.
+        self.edit_store(lambda s: s["issues"].remove(next(i for i in s["issues"]
+                                                          if i["number"] == 43)))
+        done = self.split("docs", "2")
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("CR1 has no step for the area docs; Planning makes the steps", done.stderr)
+        self.assertEqual(self.making_calls(), [])
+
+    def test_a_failing_text_check_makes_nothing(self):
+        self.edit_store(lambda s: next(i for i in s["issues"] if i["number"] == 42)
+                        .update(title="CR1.1 FORBIDDEN core"))
+        self.assertEqual(self.split("core", "2", "--dry-run").returncode, 1)
+        done = self.split("core", "2")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("text check failed for CR1.1 FORBIDDEN core (1 of 2)", done.stderr)
+        self.assertEqual(self.making_calls(), [])
+
+    # ---- filing across the parts ----
+
+    def test_findings_fill_the_first_part_and_go_on_in_the_next_with_one_run_of_numbers(self):
+        self.fill(98)
+        self.more_core(2)
+        self.assertEqual(self.split("core", "2").returncode, 0)
+        two = self.part(2)["number"]
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        text = self.dry_run_text()
+        for title, parent in (("CR1.1-3 A value on the limit is dropped.", "#42 CR1.1 core (1 of 2)"),
+                              ("CR1.1-4 Core finding 1.", "#42 CR1.1 core (1 of 2)"),
+                              ("CR1.1-5 Core finding 2.", f"#{two} CR1.1 core (2 of 2)")):
+            self.assertIn(f"- title: {title}\n- labels: review, sweep:CR1, area:core\n"
+                          f"- parent: {parent}\n", text)
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        posted = self.state()
+        self.assertEqual([posted[i]["attached"] for i in ("U01-1", "U02-1", "U02-2")],
+                         [42, 42, two])
+        self.assertEqual(len(self.under(42)), 100)
+        self.assertEqual(self.under(two), [posted["U02-2"]["number"]])
+        # A later question numbers on from the highest of both parts, in the part with room.
+        done = self.ask()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        asked = self.store()["issues"][-1]
+        self.assertTrue(asked["title"].startswith("CR1.1-6 Question: "), asked["title"])
+        self.assertEqual(asked["parent"], two)
+
+    def test_a_post_that_stopped_part_way_goes_on_in_the_same_parts(self):
+        # One place left in the first part: U01-1 takes it, and the two others go in the second.
+        self.fill(99)
+        self.more_core(2)
+        self.assertEqual(self.split("core", "2").returncode, 0)
+        two = self.part(2)["number"]
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        plan = re.search(r"^plan sha256: (\S+)$", self.dry_run_text(), re.M).group(1)
+        # U01-1 made, attached; U01-2's advisory; D1-1 made, attached; U02-1 made: its attach fails.
+        done = self.run_script("post", STUB_FAIL_AT=str(self.store()["creates"] + 7))
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertEqual(self.state()["U01-1"]["attached"], 42)
+        self.assertNotIn("attached", self.state()["U02-1"])
+        # The first part is full now. The plan after the stop is the plan before it: each
+        # finding keeps its part and its number, so post needs no new dry run.
+        self.assertEqual(len(self.under(42)), 100)
+        self.assertEqual(self.run_script("dry-run").returncode, 0)
+        self.assertEqual(re.search(r"^plan sha256: (\S+)$", self.dry_run_text(), re.M).group(1),
+                         plan)
+        done = self.run_script("post")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        posted = self.state()
+        self.assertEqual([posted[i]["attached"] for i in ("U01-1", "U02-1", "U02-2")],
+                         [42, two, two])
+        titles = {i["number"]: i["title"] for i in self.store()["issues"]}
+        self.assertEqual([titles[posted[i]["number"]].split()[0]
+                          for i in ("U01-1", "U02-1", "U02-2")], ["CR1.1-3", "CR1.1-4", "CR1.1-5"])
+
+    def test_a_question_for_a_full_step_is_kept_naming_the_split(self):
+        self.fill(100)
+        done = self.ask()
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("no room in its step (#42)", self.questions_md())
+        self.assertIn("`file_review.py split core 2` makes the room", self.questions_md())
+        self.assertEqual(self.posting_calls(), [])
+        self.assertEqual(self.split("core", "2").returncode, 0)
+        done = self.ask()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(self.store()["issues"][-1]["parent"], self.part(2)["number"])
 
 
 HEAD1 = "1" * 40
