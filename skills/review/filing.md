@@ -119,7 +119,7 @@ the filing pass writes `findings.jsonl`.
 | `scope` | `full` or `incremental` |
 | `checking` | `checked`, `quick`, or `quick, checked later` |
 | `how_it_ran` | the way the owner chose (one session, a relay, ...) |
-| `models` | the level and any piece changed from it |
+| `models` | the level, any piece changed from it, and any refusal or model change (the model that ran, and what was done about it) |
 | `verdict` | one line |
 | `matters_most` | a list: what matters most |
 | `checked_and_sound` | a list: what was looked at closely and found right, so the next review need not repeat it |
@@ -259,7 +259,7 @@ whose `name` the `pr` commands don't use. There is no dry run: the gates below a
 | `checking` | required | `checked`: a pass is always checked, and one marked `quick` is refused |
 | `verdict` | required | one line |
 | `read` | required | a list: what was read (sections, units, what was read whole) |
-| `pieces` | required | `[{"piece", "model", "effort", "tokens"}]`, what each piece ran on |
+| `pieces` | required | `[{"piece", "model", "effort", "tokens"}]`, what each piece ran on: the model that ran, read from the tool's record, not the one it was named |
 | `findings` | required | the findings pinned to a changed line: the finding shape of `findings.jsonl`, with `area` optional, and `class` and `at` added |
 | `additional` | required | the findings that can't be pinned to a changed line, of either class: the finding shape of `findings.jsonl`, with `class` added |
 | `replies` | required | `[{"id", "status", "sha", "evidence"}]`, one per earlier finding on the diff re-checked: `status` `fixed` (with `sha`, the commit that fixed it) or `holds` |

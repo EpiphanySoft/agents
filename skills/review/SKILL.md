@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Code review of a project against its requirements, and reporting what it finds. Use when starting, proposing or running a review (its stages: Prerequisites, Planning, Doc Review, Doc Rulings, Initial Code Review, Confirmation, Cross-check, Reporting, Finalization), when filing a review's findings as issues and private advisories, when taking a finding up after a review, or when adopting this method in a project. Covers the choices, the branch and work pad, the sweep and its anchor, the pieces and their briefs, claim kinds, confirmation and confirmations, the owner's questions attended or unattended, models and effort, and the filing script."
+description: "Code review of a project against its requirements, and reporting what it finds. Use when starting, proposing or running a review (its stages: Prerequisites, Planning, Doc Review, Doc Rulings, Initial Code Review, Confirmation, Cross-check, Reporting, Finalization), when filing a review's findings as issues and private advisories, when taking a finding up after a review, or when adopting this method in a project. Covers the choices, the branch and work pad, the sweep and its anchor, the pieces and their briefs, claim kinds, confirmation and confirmations, the owner's questions attended or unattended, models and effort, refusals and model changes, and the filing script."
 ---
 
 # Code review
@@ -109,7 +109,7 @@ coordinator checks). Each piece's work is committed before the next piece starts
 
 | File | Written by | What |
 |---|---|---|
-| `log.md` | every session | one line a session: start and end (from `date`), the piece, its model and effort, what it wrote, what is left; failures as they happen |
+| `log.md` | every session | one line a session: start and end (from `date`), the piece, the model it ran on and its effort, what it wrote, what is left; failures as they happen, a refusal or a model change among them |
 | `checks.txt` | Planning | the mechanical checks' report |
 | `delta.txt` | Planning | the change since the last review, per unit |
 | `map.md` | Planning | the units: sections, code paths, tests, lines |
@@ -338,8 +338,9 @@ with the reason. Confirmations and decisions after filing are comments on its is
     signing or pushing fails; its other half, never working around it, still holds. A commit that can't
     be signed stays uncommitted in the work pad (never unsigned, never another identity). A question
     that can't be filed, finds no parent, or fails the text check, is written to `questions.md` by
-    `question`. Each failure is logged in `log.md` as it happens, and the report on the owner's
-    return opens with them.
+    `question`. A refusal, or a piece carried on by another model, is a failure too, handled as
+    *Refusals and model changes* says. Each failure is logged in `log.md` as it happens, and the
+    report on the owner's return opens with them.
 
 ## How a review runs
 
@@ -377,7 +378,8 @@ run unit 07 (Initial Code Review, then Confirmation), on <model> at <effort>. St
 Each piece runs on a named model and a named effort level, never a tool's default: defaults differ
 between tools and change with releases. The Planning proposal names them for every piece, with the
 estimated tokens by model and a next-equivalent total (each model's tokens weighted by its price
-relative to the next level's model), and `log.md` records what each piece ran on.
+relative to the next level's model), and `log.md` records what each piece ran on, read from the
+tool's record of the piece (*Refusals and model changes*).
 
 - Discovery never runs below high effort.
 - A checker never runs on the model that made what it checks, so they don't share blind spots:
@@ -407,6 +409,75 @@ Recommend **Standard** by default, **Plus** when a review covers much sensitive 
 (a project's first review, say). **Premium** is the owner's call. Any piece can be adjusted in the
 proposal.
 
+## Refusals and model changes
+
+A model can refuse a request, most often on security work: a sandbox escape, a forged request, a
+secret. A tool may then carry the piece on with another model without saying so. Each breaks
+something the method rests on: a piece that stopped early has not read what its brief names, a piece
+on a lesser model is not the piece the owner approved, and a checker that fell onto the model that
+made its claims shares their blind spots.
+
+**Check each piece as it ends**, before its work is taken and before another piece starts from it:
+
+1. **Read what it ran on from the tool's own record**, never from what the piece says of itself.
+    `piece_models.py`, in this folder, reads Claude Code's sub-agent transcripts:
+    `python3 <skill>/piece_models.py --models <the proposal's model ids> <the session's subagents folder>`.
+    It names every piece that was refused, changed model, or ran on a model the proposal doesn't
+    name. It exits 2 when it could read nothing, which is a failure, never a clean run. A
+    coordinating session checks its own transcript the same way, at the end of each stage. With
+    another tool, read the same three facts from its record.
+2. **Log it as a failure, as it happens**: the piece, the time, the model that refused, the model
+    that took over, how much of the piece that model ran, and what the piece was reading.
+
+**What it means for the work:**
+
+- **A checker on the wrong model.** The rule that a checker never runs on the model that made what
+    it checks is applied to the model that ran. A verdict given after a change onto the claims' own
+    model counts nothing, and those claims are checked again.
+- **A piece on a model below its level.** What it wrote after the change is done again on the named
+    model. The one exception is a result that rests on evidence the piece saved (a run's output, a
+    screenshot, quoted lines): a context on the named model or a stronger one reads that evidence
+    and gives the result, and the log says so.
+- **A piece that stopped, or skipped part of its brief.** What it didn't cover is listed from its
+    file against its brief, and asked again as below.
+- **Nothing is taken as it stands.** A piece's work enters the review only once this is settled.
+
+**Asking again.** A review reads the owner's own code to find what is wrong and say how to fix it.
+A brief that says so plainly is refused less often than one that reads as a request to attack
+something. In this order:
+
+1. **Say what the work is.** The brief states at its top that this is a review of the owner's own
+    project, asked for by the owner, that it changes nothing, that its findings go to the owner to
+    be fixed, and that anything it runs is run in the project's own test environment.
+2. **Ask for the fault and the fix, not the attack.** A claim needs what is wrong, where, the case
+    that shows it and the remedy. It needs no working exploit, no payload and no steps against a
+    real system. A reproduction is the smallest test that fails, in the project's test environment.
+3. **Cut the piece smaller.** The part that was refused runs as a piece of its own, with only its
+    sections and code, so the rest of the unit isn't lost with it.
+4. **Keep other claims' detail out of the brief.** A brief names earlier claims by id and file. It
+    doesn't carry their exploit descriptions, or a list of everything exploitable, into a context
+    that doesn't need them.
+5. **Try the named model once more**, with the brief so changed. If it refuses again, the piece runs
+    on the stand-in the proposal names (below), still within the checker rule, and the log says so.
+6. **Still refused: it is left unread, and said so.** The part goes in the summary's *where things
+    stand* as not reviewed, with the reason. Attended, the coordinator asks the owner first.
+
+A review never rewords a request to hide what it is, never splits it so that no part shows its
+purpose, and never tells the model it is doing something else. Work that can't be asked for plainly
+is not done by the review. Leaving a piece on whatever model the tool fell to is not an answer
+either.
+
+**In the proposal.** Where refusals are likely (sandboxing, keys, sign-in, whatever the project
+lists as sensitive), the proposal names the stand-in for each level: the model a piece runs on when
+its named model has refused twice, of the same level or stronger where there is one, and never the
+claims' own model for a checker. Where the tool lets its fallback model be set or switched off, the
+proposal says which, so that no change is silent.
+
+**Unattended**, there is nobody to ask. The coordinator checks each piece as it ends, asks again by
+the steps above, uses the stand-in, and leaves unread what is still refused. The report on the
+owner's return opens with every refusal and model change, among its failures: what was refused, what
+was done about it, and what is still unread.
+
 ## Reporting
 
 Reporting makes no steps: Planning made them. Each finding is its own issue, a sub-issue of
@@ -432,7 +503,8 @@ its area's step:
 
 **The summary** is a comment on the anchor, posted last. It lists every finding by link
 and records: the commit read and the last review's commit; the skill's commit; the branch and its last
-commit; the three choices; the models; the verdict in one line; what matters most; *checked and sound*
+commit; the three choices; the models each piece ran on, with any refusal or model change; the
+verdict in one line; what matters most; *checked and sound*
 (what was looked at closely and found right, so the next review need not repeat it); and *where things
 stand* (what was left unread or read lightly, and where to start). Project boards are neither read
 nor written.
