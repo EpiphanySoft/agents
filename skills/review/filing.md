@@ -275,6 +275,10 @@ it isn't yet.
     kept there too, with its link and its parent; `question` run again attaches it. For a private
     question, the notice that couldn't be filed is noted there too.
 
+What becomes of a question issue once the owner answers is the skill's (*The owner's questions*,
+"Once answered"): the coordinator closes it, or removes its label and retitles it; the script
+doesn't.
+
 Each entry in `questions.md` is headed by its title and says why it is kept there. The coordinator
 logs every exit 1 in `log.md`.
 
