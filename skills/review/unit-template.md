@@ -15,7 +15,7 @@ it goes, and the checker adds a verdict beside each.
     bugs are.
 - **Earlier findings in its area**: <issue links and state, or "none: first review">. Re-check that
     what was marked done still holds.
-- **Phase 1 claims and decisions on its sections**: <ids, and the lines of decisions.md>.
+- **Doc Review claims and decisions on its sections**: <ids, and the lines of decisions.md>.
 - **Untraced code given to it**: <paths, or none>.
 - **Open questions it hangs on** (unattended): <question issue links, or none>. Review under each
     reading and tag each claim that depends on one.
@@ -49,5 +49,5 @@ plausible: <the question> | rejected: <the reason>. **Confirmations**: <n>.
 
 ## Found while checking
 
-The checker's notes on what no claim covers, each in the claim format above and unverified. The
-cross-check checks them; nothing here enters the review on the checker's word.
+The checker's notes on what no claim covers, each in the claim format above and unverified. Cross-check
+checks them; nothing here enters the review on the checker's word.

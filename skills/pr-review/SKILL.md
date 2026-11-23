@@ -11,9 +11,9 @@ what they say. The built-in `/code-review` stays the quick correctness check; th
 method's, and its findings carry the review skill's evidence and confirmations.
 
 Everything shared is the `review` skill's, by its sections, and is not repeated here: *A session's
-habits*, the claim kinds and format (*Phase 2: the units*), *Exploitable if public*, *The second blind
-run*, *Checking*, *Confirmations and status*, *The owner's questions*, *Models and effort*, and the
-issue shape of *Filing*. The project supplies what *What a project supplies* lists. This skill defines
+habits*, the claim kinds and format (*Initial Code Review*), *Exploitable if public*, *The second blind
+run*, *Confirmation*, *Confirmations and status*, *The owner's questions*, *Models and effort*, and the
+issue shape of *Reporting*. The project supplies what *What a project supplies* lists. This skill defines
 only what differs for a pull request.
 
 ## When a pass runs
@@ -68,7 +68,7 @@ Every finding has a **class**:
 - **latent**: it is there at the merge base, and the pull request doesn't make it worse.
 
 The class rests on reading or running the code at both the merge base and the head. The checker
-confirms the class along with the claim; a class it changes is a correction (*Checking*).
+confirms the class along with the claim; a class it changes is a correction (*Confirmation*).
 
 ## Posting a pass
 

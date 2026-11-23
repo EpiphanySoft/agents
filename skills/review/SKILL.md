@@ -1,6 +1,6 @@
 ---
 name: review
-description: Code review of a project against its requirements, and filing what it finds. Use when starting, proposing or running a review (Phase 0 and its Planning step, the documents, the units, checking, the cross-check), when filing a review's findings as issues and private advisories, when taking a finding up after a review, or when adopting this method in a project. Covers the choices, the branch and work pad, the pieces and their briefs, claim kinds, checking and confirmations, the owner's questions attended or unattended, models and effort, and the filing script.
+description: "Code review of a project against its requirements, and reporting what it finds. Use when starting, proposing or running a review (its stages: Prerequisites, Planning, Doc Review, Doc Rulings, Initial Code Review, Confirmation, Cross-check, Reporting, Finalization), when filing a review's findings as issues and private advisories, when taking a finding up after a review, or when adopting this method in a project. Covers the choices, the branch and work pad, the sweep and its anchor, the pieces and their briefs, claim kinds, confirmation and confirmations, the owner's questions attended or unattended, models and effort, and the filing script."
 ---
 
 # Code review
@@ -15,6 +15,10 @@ the code at once. So the work is cut into **pieces** that each fit with room to 
 writes what it finds to a file as it goes, and what passes between pieces is files, never a session's
 memory.
 
+A review runs in stages, in this order: **Prerequisites**, **Planning**, **Doc Review**, **Doc
+Rulings**, **Initial Code Review**, **Confirmation**, **Cross-check**, **Reporting** and
+**Finalization**.
+
 A review ends at **findings with agreed resolutions**. It changes no requirement and no code; acting
 on what it finds belongs to whatever follows (a sweep step, a fix pull request), under the project's
 own process.
@@ -25,8 +29,8 @@ This skill is the method. Each project's own `docs/REVIEW.md` holds only what is
 here for the rest:
 
 - **its requirements** with their ids, and how code cites them;
-- **the Phase 1 blocks**: which documents are read together, and the glossary terms are checked
-    against;
+- **the document groups**: which documents are read together, and the glossary terms are
+    checked against;
 - **its areas**: the labels with a prefix, or a command that lists them, and the area for documents
     or tooling if it has one;
 - **its sensitive code**: what keys, sign-in, secrets, links or money depend on, read whole whenever
@@ -37,18 +41,19 @@ here for the rest:
 - **its settled records**: rejected ideas, and the labels for won't do, later and gap;
 - **claim kinds of its own**, if any (a project that handles money may add one for wrong figures);
 - **its target branch**, question label and labels, which must exist in the repository;
-- **its filing config**, `docs/review.json` (see *Filing*).
+- **its filing config**, `docs/review.json` (see *Reporting*).
 
-## Before Phase 0: the method lands
+## Prerequisites
 
 The project's `docs/REVIEW.md`, its `docs/review.json` and the pin of the shared skills that carries
-this skill are on the target branch at the review's commit. The summary records the skill's
-commit. A fix to the method found during a review waits for the next review, unless the owner stops
+this skill are on the target branch at the review's commit. They are checked first, by Planning,
+which stops before making anything if one is missing: `plan` checks the two files, and the
+coordinator checks the pin. The summary records the skill's commit. A fix to the method found during a review waits for the next review, unless the owner stops
 the review to take it.
 
 ## The choices
 
-A review makes three choices at Phase 0, and its summary records them.
+A review makes three choices at Planning, and its summary records them.
 
 1. **Scope.**
     - **Full**: all the code is read whole against its sections.
@@ -56,12 +61,12 @@ A review makes three choices at Phase 0, and its summary records them.
         surrounds it to judge it. Sensitive code is read whole whenever any of it changed.
 2. **Checking.**
     - **Checked**: every claim is checked by a second, independent context before it enters the
-        review (*Checking*).
+        review (*Confirmation*).
     - **Quick**: no second pass. Each claim enters at 0 confirmations and is confirmed before anyone
         acts on it.
 3. **How it runs**: proposed by the coordinator and chosen by the owner (*How a review runs*).
 
-**Recommending.** Phase 0 recommends scope and checking, and the owner confirms either way:
+**Recommending.** Planning recommends scope and checking, and the owner confirms either way:
 
 | Choice | Recommended when |
 |---|---|
@@ -84,15 +89,15 @@ second blind run on sensitive code and on code new since the last review.
 |---|---|
 | `code-review-<N>` | the review's branch, from the target at the review's commit; `<N>` the review's number, from its sweep (`code-review-1` for CR1) |
 | `review/<N>/` on it | the work pad: everything a session needs from earlier ones |
-| the sweep: its label, its anchor issue and the steps under it | made by the Planning step (*Phase 0*) |
-| issues under the steps, and private advisories | the review's outcome, each standing on its own (*Filing*) |
+| the sweep: its label, its anchor issue and the steps under it | made by Planning |
+| issues under the steps, and private advisories | the review's outcome, each standing on its own (*Reporting*) |
 
 **Local only.** The branch and work pad are never pushed and never merged: a fork may be public, and
 unchecked claims must not publish before the owner's read. The branch is kept until the next review
 has read it (its digests and rejected claims); the summary names the branch and its last
 commit; after that it may be deleted locally.
 
-**The commit.** A review reads one commit, recorded in `log.md` when Phase 0 starts. If something
+**The commit.** A review reads one commit, recorded in `log.md` when Planning starts. If something
 merges to the target while it runs, the pieces still read the review's commit (`git show
 <commit>:<path>`), and the delta runs to it.
 
@@ -105,20 +110,20 @@ coordinator checks). Each piece's work is committed before the next piece starts
 | File | Written by | What |
 |---|---|---|
 | `log.md` | every session | one line a session: start and end (from `date`), the piece, its model and effort, what it wrote, what is left; failures as they happen |
-| `checks.txt` | Phase 0 | the mechanical checks' report |
-| `delta.txt` | Phase 0 | the change since the last review, per unit |
-| `map.md` | Phase 0 | the units: sections, code paths, tests, lines |
-| `docs-<block>.md` | Phase 1 | a block's claims and its claims digest |
-| `docs-compare.md` | Phase 1 | the conflicts between the digests |
+| `checks.txt` | Planning | the mechanical checks' report |
+| `delta.txt` | Planning | the change since the last review, per unit |
+| `map.md` | Planning | the units: sections, code paths, tests, lines |
+| `docs-<group>.md` | Doc Review | a document group's claims and its claims digest |
+| `docs-compare.md` | Doc Review | the conflicts between the digests |
 | `decisions.md` | the coordinator | each agreed resolution, after its walk thru's final approval |
-| `unit-<nn>-<name>.md` | Phase 2 | a unit's brief, claims, verdicts and what was found while checking ([template](unit-template.md)) |
-| `cross-check.md` | the cross-check | the verdicts on what was found while checking |
+| `unit-<nn>-<name>.md` | Initial Code Review | a unit's brief, claims, verdicts and what was found while checking ([template](unit-template.md)) |
+| `cross-check.md` | Cross-check | the verdicts on what was found while checking |
 | `exploitable.json` | the coordinator | the ids of the claims flagged exploitable if public |
 | `questions.md` | the coordinator | unattended: questions that could not be filed, and those that must stay private |
-| `findings.jsonl`, `summary.json` | filing | the records the filing script reads ([filing.md](filing.md)) |
+| `findings.jsonl`, `summary.json` | Reporting | the records the filing script reads ([filing.md](filing.md)) |
 | `filing-dry-run.md`, `filing-state.json` | the script | the dry run the owner reads, and what was filed and attached |
 
-The ids in the work pad are its own: `D1-4` for the fourth claim of Phase 1's first block, `U07-12`
+The ids in the work pad are its own: `D1-4` for the fourth claim of Doc Review's first document group, `U07-12`
 for unit 7's twelfth. A finding's lasting id is its issue's number, given when it is filed.
 
 ## A session's habits
@@ -145,17 +150,18 @@ for unit 7's twelfth. A finding's lasting id is its issue's number, given when i
 8. **End with the log.** A session's last act is its line in `log.md` and its commit.
 9. **Scratch stays out of the repository**, even for a moment.
 
-## Phase 0: the plan, the checks, the map, the delta, the proposal
+## Planning: the sweep, the checks, the map, the delta, the proposal
 
-Phase 0 runs in the coordinating session, or its agent writes the proposal and the coordinator asks.
+Planning runs in the coordinating session, or its agent writes the proposal and the coordinator asks.
 
 The start of a review is the start of its **sweep**: the plan of the work its findings make. One
 name, `<prefix><N>` (`CR1`, the prefix from the project's config, `CR` by default), runs through all
 of it: the sweep label `sweep:CR1`, the anchor, the step ids `CR1.1`, the markers, the branch
 `code-review-1` and the work pad `review/1/`.
 
-1. **The Planning step**, the coordinator's, before the review's branch exists:
-    `file_review.py plan --dry-run`, then `file_review.py plan` ([filing.md](filing.md)). `N` is one
+1. **The sweep**, the coordinator's, before the review's branch exists, on the target branch at the
+    review's commit: `file_review.py plan --dry-run`, then `file_review.py plan`
+    ([filing.md](filing.md)). It checks the *Prerequisites* first and makes nothing if one is missing. `N` is one
     more than the highest among the `sweep:<prefix><N>` labels, or 1. It makes the label
     `sweep:<prefix><N>` (and stops if it exists already); the **anchor**, an issue titled "CR1 Code
     review" with the sweep label and no area label, which is the review's own step: its summary and
@@ -167,7 +173,7 @@ of it: the sweep label `sweep:CR1`, the anchor, the step ids `CR1.1`, the marker
     an explicit `--sweep CR1`; nothing about the sweep is kept in the work pad or the config.
 2. **The mechanical checks.** The project's command reports what needs no judgement (citations of
     missing ids, broken tables, stale references) into `checks.txt`, so no agent spends its context
-    finding them by reading. What remains becomes Phase 1 claims.
+    finding them by reading. What remains becomes Doc Review claims.
 3. **The map.** One session builds `map.md`: for each requirement section, the code that builds it,
     the tests that check it, and their sizes, starting from the code's citations and filling the rest
     from its layout and imports. It cuts the code into **units** of about 10,000 lines each:
@@ -177,7 +183,7 @@ of it: the sweep label `sweep:CR1`, the anchor, the step ids `CR1.1`, the marker
     - code that cites no section and serves none is listed as **untraced**, with the unit it sits
         beside, whose session judges it;
     - units follow the project's own order (requirement order where the areas follow it), with the
-        **tooling unit** last (*Phase 2*).
+        **tooling unit** last (*Initial Code Review*).
 4. **The delta.** From the last review's commit to this one's, per unit, renames found:
     `git diff -M --numstat <last>..<commit> -- <unit's paths>`. Summed against each unit's lines, it
     gives the share changed that the choices are recommended from. A first review has none.
@@ -185,11 +191,11 @@ of it: the sweep label `sweep:CR1`, the anchor, the step ids `CR1.1`, the marker
     and, for a large review, whether it will run unattended, unless the owner has already said. The
     owner's answers go into `log.md`.
 
-## Phase 1: the documents
+## Doc Review
 
-One session per block, each reading its block whole. Each looks for:
+One session per document group, each reading its group whole. Each looks for:
 
-- contradictions within the block;
+- contradictions within the group;
 - terms used other than the glossary defines them;
 - behaviour named and never specified (a candidate gap);
 - the same thing specified twice, differently;
@@ -197,27 +203,30 @@ One session per block, each reading its block whole. Each looks for:
 - the project's documented rules the documents break;
 - what a mockup shows against what its sections say, from its text.
 
-It turns `checks.txt`'s problems for its block into claims. Each block also writes a **claims
-digest**: one line per fact another block could contradict, with its id. A fact is a term and what it
+It turns `checks.txt`'s problems for its group into claims. Each group also writes a **claims
+digest**: one line per fact another group could contradict, with its id. A fact is a term and what it
 means, a limit or default, a state and what moves it, who may do what, and what is sent or stored
 where. A further session reads only the digests and writes `docs-compare.md`: the conflicts between
-blocks, each a claim with both ids. An incremental review reads only the sections changed since, and
+groups, each a claim with both ids. An incremental review reads only the sections changed since, and
 compares their new digests with the last review's, read from its branch.
 
-In a checked review, Phase 1's claims are checked like the units', each block's at the end of its
+In a checked review, Confirmation runs on Doc Review's claims too, each group's at the end of its
 session.
 
-## The gate
+## Doc Rulings
 
-A High claim from Phase 1 that two documents disagree on behaviour the code will be checked against
-is decided before the units that depend on it, in a walk thru (the shared `CLAUDE.md` rule). The
-decision is the finding's agreed resolution: written to `decisions.md` after the walk thru's final
-approval, given to the briefs that judge code against it, and carried onto the finding's issue at
-filing. The requirements themselves are changed by whatever follows the review. A unit waits only
-while such a claim touches its own sections; Med and Low claims hold nothing up. Unattended, a
+A High claim from Doc Review that two documents disagree on behaviour the code will be checked
+against is decided before the units that depend on it, in a walk thru (the shared `CLAUDE.md` rule).
+The decision is the finding's agreed resolution: written to `decisions.md` after the walk thru's
+final approval, given to the briefs that judge code against it, and carried onto the finding's issue
+at Reporting. The requirements themselves are changed by whatever follows the review. Unattended, a
 decision lands once the owner answers its question issue.
 
-## Phase 2: the units
+Doc Rulings holds up only the units its conflicts touch, and only for High conflicts (Med and Low
+hold nothing up); it is skipped when there are none; and a ruling is recorded like any other
+decision, in `decisions.md`, and carried onto the finding's issue as its agreed resolution.
+
+## Initial Code Review
 
 One session per unit, in the map's order. Its brief is written at the top of its file before it
 starts ([`unit-template.md`](unit-template.md)):
@@ -226,7 +235,7 @@ starts ([`unit-template.md`](unit-template.md)):
 2. its delta, read first: recent changes are where the bugs are;
 3. the earlier reviews' findings in its area, with their state, to re-check that what was marked
     done still holds;
-4. the Phase 1 claims and `decisions.md` lines on its sections;
+4. the Doc Review claims and `decisions.md` lines on its sections;
 5. the untraced code the map gave it;
 6. unattended, the open questions it hangs on.
 
@@ -251,7 +260,7 @@ on reading alone.
 **Exploitable if public.** The unit session flags any security or privacy claim that would be
 exploitable if public, from the moment it is made, and the coordinator adds its id to the work pad's
 `exploitable.json`. The checker may change the flag, as a correction. The flag keeps a question about
-the claim private, and sets how it is filed (*Filing*).
+the claim private, and sets how it is filed (*Reporting*).
 
 **The second blind run.** Where the choices call for one, a second discovery run reads the same unit
 from the same brief, blind to the first, on its own model. Its claims join the unit's file under their
@@ -261,7 +270,7 @@ own ids, and the checker judges both runs' claims.
 tooling, read against the project's own docs for them. It takes the same brief, claim kinds and
 checking, and is cut like any unit.
 
-## Checking
+## Confirmation
 
 In a checked review, when a unit's claims are written, one **checker** starts: a fresh context given
 the claims file, the review's commit and this section, and nothing of the session's reasoning. For
@@ -281,8 +290,14 @@ in the claim format. It never adds them to the claims: nothing enters the review
 context that found it. Rejected claims stay in the unit's file with their reasons, so the next review
 doesn't raise them again without new evidence.
 
-**The cross-check.** After the last unit, one session checks everything found while checking,
-across all units, the same way, and writes `cross-check.md`. Each one it confirms goes to the unit it belongs to.
+Confirmation also runs after Doc Review, in a checked review, on each document group's claims, the
+same way.
+
+## Cross-check
+
+After the last unit, one session checks everything found while checking, across all units, the same
+way as Confirmation, and writes `cross-check.md`. Each one it confirms goes to the unit it belongs
+to.
 
 ## Confirmations and status
 
@@ -308,7 +323,7 @@ with the reason. Confirmations and decisions after filing are comments on its is
     walk-thru item (the question, the options, the recommendation), and walked thru on the owner's
     return. It is labelled and placed like the claim that raised it: the sweep label and the claim's
     area label, a sub-issue of that area's step, titled like a finding (`CR1.1-3 Question: ...`; its
-    body and marker name the review). A question about the review itself (Phase 0's, say) goes under
+    body and marker name the review). A question about the review itself (Planning's, say) goes under
     the anchor.
     `file_review.py question` files it ([filing.md](filing.md)), after the text check.
 - **No unit waits.** A unit whose judgement hangs on an open question reviews under each reading and
@@ -317,7 +332,7 @@ with the reason. Confirmations and decisions after filing are comments on its is
 - **Kept private.** A question about a claim that would be exploitable if public (its id is in
     `exploitable.json`) is never filed publicly: `question` keeps it in `questions.md`, and the issue it
     files says only that one is waiting, without its content or its area, under the anchor.
-- **Through the dry run.** Unattended, the review runs through the filing dry run; only posting waits
+- **Through the dry run.** Unattended, the review runs through Reporting's dry run; only posting waits
     for the owner's read.
 - **Failures don't halt it.** Unattended, a failure is an exception to the standing rule to stop when
     signing or pushing fails; its other half, never working around it, still holds. A commit that can't
@@ -328,7 +343,7 @@ with the reason. Confirmations and decisions after filing are comments on its is
 
 ## How a review runs
 
-The skill doesn't fix it. At Phase 0 the coordinator proposes the ways a large review could run and
+The skill doesn't fix it. At Planning the coordinator proposes the ways a large review could run and
 recommends one:
 
 | Way | What it buys |
@@ -345,27 +360,27 @@ is the ask the relay and workflow rules require, and the chosen way follows its 
 review may simply run in one session.
 
 Whatever the way, the pieces are the same: the briefs, the work-pad files, the rule that only an
-independent context confirms a claim, and the filing. Where pieces run at once: Phase 1's blocks
+independent context confirms a claim, and Reporting. Where pieces run at once: Doc Review's groups
 together, the comparison after all of them; units several at a time, within the project's machine
-limits; a checker per claim rather than per unit; the cross-check split by unit.
+limits; a checker per claim rather than per unit; Cross-check split by unit.
 
 **Starting a piece.** Each piece starts with a short prompt naming the review, its branch, the piece
 and this skill; the previous piece leaves the next brief written:
 
 ```
 Code review CR4 (review/4/ on the local code-review-4 branch), with the review skill:
-run unit 07 (Phase 2, then Checking), on <model> at <effort>. Start from log.md and the unit's brief.
+run unit 07 (Initial Code Review, then Confirmation), on <model> at <effort>. Start from log.md and the unit's brief.
 ```
 
 ## Models and effort
 
 Each piece runs on a named model and a named effort level, never a tool's default: defaults differ
-between tools and change with releases. The Phase 0 proposal names them for every piece, with the
+between tools and change with releases. The Planning proposal names them for every piece, with the
 estimated tokens by model and a next-equivalent total (each model's tokens weighted by its price
 relative to the next level's model), and `log.md` records what each piece ran on.
 
 - Discovery never runs below high effort.
-- Checking runs on a different model from discovery's, so they don't share blind spots. A severity
+- Confirmation runs on a different model from discovery's, so they don't share blind spots. A severity
     the checker raises is a correction like any other.
 - Two blind discovery runs find more than either alone.
 - Reading prose may use a cheaper model at high effort.
@@ -375,21 +390,21 @@ each.
 
 | Piece | Standard | Plus | Premium |
 |---|---|---|---|
-| Coordinating, Phase 0 | next, high | next, high | strongest, high |
-| Reading prose (Phase 1) | cheaper, high | cheaper, high | cheaper, high |
+| Coordinating, Planning | next, high | next, high | strongest, high |
+| Reading prose (Doc Review) | cheaper, high | cheaper, high | cheaper, high |
 | Discovery | next, high | strongest, high | strongest, high |
 | Second blind run: sensitive units | cheaper, high | cheaper, high | cheaper, xhigh |
 | Second blind run: other units | none | none | cheaper, high |
-| Checking and the cross-check | cheaper, high | cheaper, high | next, high |
-| Filing (dry run): the script, and a model pass writing the issue texts, the summary and the exploitable marks | next, high | next, high | next, high |
+| Confirmation and Cross-check | cheaper, high | cheaper, high | next, high |
+| Reporting (dry run): the script, and a model pass writing the issue texts, the summary and the exploitable marks | next, high | next, high | next, high |
 
 Recommend **Standard** by default, **Plus** when a review covers much sensitive or never-reviewed code
 (a project's first review, say). **Premium** is the owner's call. Any piece can be adjusted in the
 proposal.
 
-## Filing
+## Reporting
 
-Filing makes no steps: the Planning step made them. Each finding is its own issue, a sub-issue of
+Reporting makes no steps: Planning made them. Each finding is its own issue, a sub-issue of
 its area's step:
 
 - **a title** of one sentence, `<step id>-<m> <sentence>` (`CR1.3-2 A value on the limit is
@@ -408,7 +423,7 @@ its area's step:
 - **a parent**: the one open sub-issue of the sweep's anchor that carries its area label and is no
     finding (no finding's marker in its body). The anchor is the one open issue with the sweep label,
     no parent and no finding's marker. A finding with no area goes under the anchor. No match, or two
-    or more, and the dry run fails naming the area and the issues; filing never makes a parent.
+    or more, and the dry run fails naming the area and the issues; Reporting never makes a parent.
 
 **The summary** is a comment on the anchor, posted last. It lists every finding by link
 and records: the commit read and the last review's commit; the skill's commit; the branch and its last
@@ -423,7 +438,7 @@ sub-issue: its title is the plain sentence, with no parent and no number. The dr
 finding's mark, and the owner confirms or changes each one at the read. The summary gives only their
 count.
 
-**The script.** `file_review.py`, in this folder, plans the sweep (`plan`, *Phase 0*) and files a
+**The script.** `file_review.py`, in this folder, plans the sweep (`plan`, *Planning*) and files a
 review from `findings.jsonl` and `summary.json` in the work pad and the project's `docs/review.json`
 ([filing.md](filing.md)):
 
@@ -444,21 +459,21 @@ and the same title rule. Outside one, the issue has no sweep label, no parent an
 script's `pr` commands post a pull request review's passes (the `pr-review` skill), and `respond` the
 author's answers on it (the `pr-respond` skill), with the same text check and markers.
 
-## After the review
+## Finalization
 
-The skill ends at agreed resolutions. What it keeps:
+The skill ends at agreed resolutions. **Confirm before acting** is a standing rule, not a step: a
+claim at 0 confirmations is not fixed, decided or written into the requirements until someone
+confirms it, by a test that reproduces it or a reading of the code and requirement that doesn't lean
+on the claim. Whoever takes it up does this first, and it adds one. The steps:
 
-1. **Confirm before acting.** A claim at 0 confirmations is not fixed, decided or written into the
-    requirements until someone confirms it: a test that reproduces it, or a reading of the code and
-    requirement that doesn't lean on the claim. Whoever takes it up does this first, and it adds one.
-2. **Walk thru** the plausible claims and the ones that need a choice (the shared `CLAUDE.md` rule).
+1. **Walk thru** the plausible claims and the ones that need a choice (the shared `CLAUDE.md` rule).
     Each decision goes into `decisions.md` once the walk thru's final approval is given.
-3. **Each confirmation or decision goes on its issue** as a comment. The only edit to a body after
+2. **Each confirmation or decision goes on its issue** as a comment. The only edit to a body after
     filing is a severity the owner changed in a walk thru, written as part of carrying out that
     decision.
-4. **A quick review can be checked later**: a checking pass over its claims raises their
+3. **A quick review can be checked later**: a Confirmation pass over its claims raises their
     confirmations, and its summary then reads "quick, checked later".
-5. **A recommendation nobody takes up** gets an id in the project's gaps, questions or later work, so
+4. **A recommendation nobody takes up** gets an id in the project's gaps, questions or later work, so
     it isn't lost when the next review starts.
 
 **Issues are the owner's to close.** Agents never close an issue unless the owner explicitly asks,
