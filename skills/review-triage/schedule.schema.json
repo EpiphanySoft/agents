@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A sweep's work schedule (the review-triage skill)",
+  "description": "The work units a review's findings are fixed in, in their order, and each finding's record from the sort. Read by triage.py, which checks a schedule against this schema and refuses one that doesn't match, naming the field. It holds the plan only: a unit's progress is read from its pull request and its findings' issues, never written here.",
+  "type": "object",
+  "required": ["sweep", "units", "findings"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional link to this schema, for editors."
+    },
+    "sweep": {
+      "type": "string",
+      "pattern": "^[A-Za-z]+[1-9][0-9]*$",
+      "description": "The sweep's name, such as CR1."
+    },
+    "units": {
+      "type": "array",
+      "description": "The work units, in the order they are taken up. A unit is one pull request.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "findings", "files"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "description": "The unit's id, such as U07. Its pull request's description carries it in a marker."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\n]+$",
+            "description": "What the unit changes, in a few words: \"the sync loop\"."
+          },
+          "findings": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "integer", "minimum": 1},
+            "uniqueItems": true,
+            "description": "The issue numbers of its findings, most severe first."
+          },
+          "files": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true,
+            "description": "Every file the unit's fixes change: code, tests, requirement sections, shared test data. Paths from the repository's root. Two units that share a file never run side by side."
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true,
+            "description": "Optional. The ids of earlier units that must be merged first, whatever their files."
+          },
+          "oversize": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional. Why the unit holds more findings than the project's unit_size."
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Each finding's record from the sort.",
+      "items": {
+        "type": "object",
+        "required": ["finding", "readiness", "files", "size", "proof"],
+        "additionalProperties": false,
+        "properties": {
+          "finding": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Its issue's number."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": ["ready", "choice", "check", "not now"],
+            "description": "ready: the remedy is clear and nothing in it is the owner's to choose. choice: it needs the owner's decision. check: it can't be sorted until a fact is known. not now: proposed as later work or as not planned."
+          },
+          "files": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "uniqueItems": true,
+            "description": "The files its fix changes."
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 1},
+            "uniqueItems": true,
+            "description": "Optional. The findings that must be fixed before it, or that the same change fixes."
+          },
+          "size": {
+            "type": "string",
+            "enum": ["small", "medium", "large"]
+          },
+          "proof": {
+            "type": "string",
+            "minLength": 1,
+            "description": "What proving the fix needs: a test, a container, a VM."
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Optional. Anything the unit's session should know that the issue doesn't say."
+          }
+        }
+      }
+    },
+    "set_aside": {
+      "type": "array",
+      "description": "Optional. The open findings no unit holds, each with the reason.",
+      "items": {
+        "type": "object",
+        "required": ["finding", "why"],
+        "additionalProperties": false,
+        "properties": {
+          "finding": {"type": "integer", "minimum": 1},
+          "why": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

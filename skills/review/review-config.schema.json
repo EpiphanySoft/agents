@@ -44,7 +44,32 @@
     "question_label": {
       "type": "string",
       "minLength": 1,
-      "description": "Optional, \"question\" when left out. The label of a finding that is a choice for the owner, and of a question issue."
+      "description": "Optional, \"question\" when left out. The label of a question issue: open while it waits for the owner, closed once answered, and kept then."
+    },
+    "refine_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional, \"refine\" when left out. The label of a finding that can't be worked until the owner has decided something about it. It comes off when the decision is recorded."
+    },
+    "dismiss_label": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional, \"dismiss\" when left out. The label of a finding the work showed to be no defect: open, it is proposed for dismissal; closed by the owner, it is dismissed, and keeps the label."
+    },
+    "schedule": {
+      "type": "string",
+      "pattern": "\\{sweep\\}.*\\.json$",
+      "description": "Optional, \"docs/remediation/{sweep}-schedule.json\" when left out. Where a sweep's work schedule is kept (the review-triage skill), with {sweep} standing for the sweep's name, such as CR1."
+    },
+    "unit_size": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional, 20 when left out. The most findings a work unit of the schedule holds, unless the unit says why it holds more."
+    },
+    "open_units": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Optional, 3 when left out. The most work units open at once: started and not yet merged."
     },
     "text_check": {
       "type": "string",

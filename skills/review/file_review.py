@@ -201,6 +201,11 @@ def load_config(path):
     check_schema(config, load_json(CONFIG_SCHEMA, "schema"), "config")
     config.setdefault("labels", [])
     config.setdefault("question_label", "question")
+    config.setdefault("refine_label", "refine")
+    config.setdefault("dismiss_label", "dismiss")
+    config.setdefault("schedule", "docs/remediation/{sweep}-schedule.json")
+    config.setdefault("unit_size", 20)
+    config.setdefault("open_units", 3)
     return config
 
 
@@ -633,7 +638,9 @@ def issue_labels(config, f, sweep_label=None):
     if "kind_prefix" in config:
         labels.append(config["kind_prefix"] + f["kind"])
     if f.get("question"):
-        labels.append(config["question_label"])
+        # A finding is work: one that waits on the owner's choice is to refine, and the question
+        # label is a question issue's alone.
+        labels.append(config["refine_label"])
     return list(dict.fromkeys(labels))
 
 

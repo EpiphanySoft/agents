@@ -141,6 +141,14 @@ Only after confirm passes, in this order:
 7. Update memory and handoff notes that call the PR open or pending: merged, with its squash commit.
     Don't close or edit issues on GitHub; say which ones look ready to close.
 
+## Merge-readiness
+
+Every update about a pull request says where its merge stands, in one of two forms:
+
+- **"merge waits on …"**, naming each agreed thing that is not done yet: CI, a review pass, an
+    answer of mine, another pull request's merge.
+- **"merge is yours"**, when nothing is left but my approval.
+
 # Message timestamps
 
 A hook in `$CLAUDE_CONFIG_DIR/settings.json` adds `Now (Chicago): Oct 29, 8:10 AM` after every prompt

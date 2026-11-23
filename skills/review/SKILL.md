@@ -21,7 +21,7 @@ Rulings**, **Initial Code Review**, **Confirmation**, **Cross-check**, **Reporti
 
 A review ends at **findings with agreed resolutions**. It changes no requirement and no code; acting
 on what it finds belongs to whatever follows (a sweep step, a fix pull request), under the project's
-own process.
+own process. The `review-triage` skill orders and batches that work, and says how it is run.
 
 ## What a project supplies
 
@@ -40,7 +40,9 @@ here for the rest:
 - **the time cap for an unattended run** of a command over a minute (10 minutes, say);
 - **its settled records**: rejected ideas, and the labels for won't do, later and gap;
 - **claim kinds of its own**, if any (a project that handles money may add one for wrong figures);
-- **its target branch**, question label and labels, which must exist in the repository;
+- **its target branch**, and its labels, which must exist in the repository: the question label (a
+    question issue), the refine label (a finding that waits on the owner's decision) and the
+    dismiss label (a finding the work showed to be no defect);
 - **its filing config**, `docs/review.json` (see *Reporting*).
 
 ## Prerequisites
@@ -311,9 +313,11 @@ A claim's **confirmations** count the independent contexts that found it holds:
 - **plausible** adds nothing: the claim is a question until it is answered;
 - **rejected** drops it.
 
-A filed finding's **status** is its issue's: open; open with the question label, a choice for the
-owner, until the owner decides (*The owner's questions*, "Once answered"); closed as completed, by
-the pull request that fixed it; closed as not planned, by the owner, with the reason. Confirmations and decisions after filing are comments on its issue.
+A filed finding's **status** is its issue's: open; open with the refine label, a choice for the
+owner, until the owner decides (*The owner's questions*, "Once answered"); open with the dismiss
+label, proposed for dismissal with its evidence; closed as completed, by the pull request that fixed
+it; closed as not planned, by the owner, with the reason. A finding is work, so it never carries the
+question label: that one is a question issue's alone. Confirmations and decisions after filing are comments on its issue.
 
 ## The owner's questions
 
@@ -330,10 +334,12 @@ the pull request that fixed it; closed as not planned, by the owner, with the re
 - **No unit waits.** A unit whose judgement hangs on an open question reviews under each reading and
     tags its claims with the question. Once the owner decides, the rejected reading's claims are
     dropped, recorded as rejected with the decision as the reason.
-- **Once answered.** A question doesn't stay a question. When the walk thru's final approval is
-    given, every issue with the question label that it decided (a question issue, or a finding filed
-    as a choice for the owner) gets the decision as a comment and takes one of two ends. The walk
-    thru's summary names the end of each, so the approval covers it:
+- **Once answered.** Nothing stays waiting once it is decided. When the walk thru's final approval
+    is given, each finding with the refine label that it decided gets the decision as a comment
+    and loses the label: it is then work like any other finding, or is closed by the owner when
+    the decision is that it is none. Each question issue it decided gets the decision as a comment
+    and takes one of two ends. The walk thru's summary names the end of each, so the approval
+    covers it:
     - **Closed**, when the answer ends it: nothing follows from it, or everything that follows is
         another issue's already. A question answered before the findings are posted usually ends
         this way: its surviving claims are filed as findings that carry the decision as their agreed
@@ -345,8 +351,8 @@ the pull request that fixed it; closed as not planned, by the owner, with the re
         loses the question label and stays open, retitled for the work in place of the question,
         its leading id kept, and is a finding from then on: the decision's comment gives its
         severity, and its fix closes it.
-    So an open issue with the question label is a choice still waiting for the owner, and a closed
-    one is a question answered, never a fix.
+    So an open issue with the question label or the refine label is a choice still waiting for
+    the owner, and a closed one with the question label is a question answered, never a fix.
 - **What an answer opens.** An answer can call for more work than one issue holds. Work that
     follows directly from the answer and belongs to the issue's area is filed as that issue's
     sub-issue, with the sweep label and the area label and a plain title, and the issue stays open
@@ -518,7 +524,7 @@ its area's step:
 - **the sweep label**;
 - **a kind label**, `<kind_prefix><kind>`, when the project's config sets `kind_prefix`; without it,
     the kind is in the body only;
-- **the question label** when it is a choice for the owner;
+- **the refine label** when it is a choice for the owner;
 - **a parent**: the one open sub-issue of the sweep's anchor that carries its area label and is no
     finding (no finding's marker in its body). The anchor is the one open issue with the sweep label,
     no parent and no finding's marker. A finding with no area goes under the anchor. No match, or two
@@ -584,8 +590,8 @@ on the claim. Whoever takes it up does this first, and it adds one. The steps:
     decision.
 3. **No answered question stays open as a question.** Each one is closed, keeping its label, or
     becomes the work, without it, with what it opens filed where it belongs (*The owner's
-    questions*, "Once answered"). The one edit to a title after filing is that of a question that
-    became the work.
+    questions*, "Once answered"). A decided finding loses the refine label. The one edit to a
+    title after filing is that of a question that became the work.
 4. **A quick review can be checked later**: a Confirmation pass over its claims raises their
     confirmations, and its summary then reads "quick, checked later".
 5. **A recommendation nobody takes up** gets an id in the project's gaps, questions or later work, so
@@ -601,7 +607,8 @@ request for a sweep's issues carries the sweep label. Agents comment: confirmati
 (the shared `CLAUDE.md` PR terms).
 
 Acting on a finding (the pull request that fixes it, code citing requirements, a fix cycle's own
-hardening) is the project's own process. Mutation testing is the `mutation` skill's.
+hardening) is the project's own process, scheduled and run as the `review-triage` skill says.
+Mutation testing is the `mutation` skill's.
 
 ## Adopting this skill
 
