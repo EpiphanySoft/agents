@@ -29,6 +29,9 @@ review findings, design choices or questions:
     each one means, and the recommendation clearly called out so a response of "Ok" or
     "Agree" or "Approve" is never ambiguous. Alternatives are split out and never
     presented as optional parts of the recommendation.
+1.1. A question with a choice of answers labels them A, B, C and so on, and names its
+    recommendation by that letter. "Yes" is read as "Agree", so no answer's own wording
+    starts with "Yes" or "No".
 2. A counter on each item. Every item starts with "(X of Y)", where X is the item's
     place and Y is the number of items. It goes in the timestamp, like
     "Oct 31, 10:07 AM (1 of 3): ".
@@ -47,15 +50,23 @@ review findings, design choices or questions:
     of 4.3, a summary and final lock in of item 4 is done, only then proceed to 5.
 6.3. The numbering rule for a split would be "(4.2: 1 of 3)" which would cover 4.2.1,
     4.2.2, and 4.2.3
-7. If a round has multiple questions, number them and make a recommendation that can be
-    unambiguously approved or discussed.
-7.1. For example, if 4.2 had 4 questions, you would ask them like so:
+7. If a round has multiple questions, number them 1, 2, 3 and so on, and give each one a
+    recommendation that can be unambiguously approved or discussed.
+7.1. For example, if 4.2 had 3 questions, you would ask them like so:
 ```
 Questions I have for you:
-1. Words go here (Recommend: yes)
-2. More words ... (Recommend: 42)
+1. Words go here? (Recommend: B)
+    A. One answer, and what it means
+    B. Another answer, and what it means
+2. More words ...? (Recommend: A)
+    A. ...
+    B. ...
+    C. ...
+3. A question with no list of answers? (Recommend: 42)
 ```
-7.2. If a split is requested, these are the sub-items. Otherwise, each can be targeted
+7.2. A reply gives each question's number and its answer's letter, like "1-A 2-C 3-42".
+    "Agree" takes every recommendation.
+7.3. If a split is requested, these are the sub-items. Otherwise, each can be targeted
     in a reply but don't move on until all questions are answered.
 
 What not to do:
