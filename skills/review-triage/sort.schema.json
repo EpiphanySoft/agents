@@ -54,7 +54,7 @@
             "minimum": 1
           },
           "uniqueItems": true,
-          "description": "Optional. The findings that change the same function or turn on the same rule, without one having to come first: they are batched together where they fit, and asked together where they are choices."
+          "description": "Optional. The findings that change the same function or turn on the same rule, without one having to come first, and a finding whose ruling by the owner this one waits on: they are batched together where they fit, and asked together where they are choices. In a shared file, two related findings keep their units from running side by side."
         },
         "size": {
           "type": "string",
@@ -125,7 +125,7 @@
           "description": "For a not now, and for a check that showed no defect: the reason."
         }
       },
-      "description": "A line of a sort piece's file, triage/sort-<step>.jsonl: the record the schedule keeps for a finding, and beside it what the owner will be asked. triage.py also holds: a choice has its ask, a not now its why, and nothing else has an ask."
+      "description": "A line of a sort piece's file, triage/sort-<area>.jsonl, or of triage/decided.jsonl, where the coordinator writes a finding's record anew once the owner has decided it: the record the schedule keeps for a finding, and beside it what the owner will be asked. triage.py also holds: a choice has its ask, a not now its why, nothing else has an ask, and a decided record is no choice."
     },
     "check": {
       "type": "object",

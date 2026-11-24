@@ -3,7 +3,7 @@
 them, and say which of its work units can start. See SKILL.md beside this script.
 
     triage.py gather      [--sweep CR1] [--config docs/review.json] [--pad review/<N>]
-    triage.py sorted [<file> ...] [--sweep CR1] [--config ...] [--pad review/<N>]
+    triage.py sorted [<file> ...] [--step <step>,...] [--sweep CR1] [--config ...] [--pad review/<N>]
     triage.py check       [--sweep CR1] [--config ...] [--schedule <file>] [--offline]
     triage.py next        [--sweep CR1] [--config ...] [--schedule <file>] [--started U08,U09]
     triage.py guard <unit> --base <ref> [--sweep CR1] [--config ...] [--schedule <file>]
@@ -15,21 +15,37 @@ docs/remediation/<sweep>-schedule.json by default), checked against schedule.sch
 
 `gather` writes the sweep's open findings, read from their issues, to <pad>/triage/findings.json:
 what the sort reads, each with its body and the comments of the project's owners, members and
-collaborators, where a decision is recorded. `sorted` checks the sort's files in <pad>/triage: every line of every sort-*.jsonl and check*.jsonl
+collaborators, where a decision is recorded. It writes them once more a step, as
+findings-<area>.json, so a sort piece reads its own step and no more.
+
+`sorted` checks the sort's files in <pad>/triage: every line of every sort-*.jsonl and check*.jsonl
 against sort.schema.json (a choice with its ask, a not now with its why), every gathered finding
 sorted once, every High and Med one judged once by the checker, and every finding a record names a
 gathered one. It lists where the checker differs from the sorter, which makes the finding a choice,
-and writes <pad>/triage/sorted.json: each finding's record with that settled. Given files, it checks
-only their lines, so a piece checks its own file before it ends. `check` checks a schedule: against
-the schema, against itself (a finding in one
-unit only, each with its record, a unit's files holding its findings' files, a dependency on an
-earlier unit, no unit over the project's unit_size without its reason) and, unless --offline, against
-GitHub (every open finding in a unit or set aside). `next` says, for each unit in order, whether it
-is merged, open, can start, can start on top of one open unit, or what it waits on; a unit's state
-is its pull request's, found by the marker `<!-- remediation CR1 U07 -->` in its description, and
---started names units begun with no pull request yet. `guard` compares the files a unit's branch
-changed since <ref> with the unit's plan, and stops (exit 1) on a file outside it that another
-unmerged unit claims. `unscheduled` lists the open findings the schedule doesn't hold.
+and writes <pad>/triage/sorted.json: each finding's record with that settled. A record of
+decided.jsonl, written once the owner has decided a finding, stands in the sorter's place. Given
+files, it checks only their lines, so a piece checks its own file before it ends. Given --step, it
+holds only those steps' findings to the check, each step named by its area or its issue's number,
+and writes nothing: a step is checked as its pieces end.
+
+`check` checks a schedule: against the schema, against itself (a finding in one unit only, each
+with its record, a unit's files holding its findings' files, a dependency on an earlier unit, no
+unit over the project's unit_size without its reason, a shared file changed by the project's
+shared_at units or more) and, unless --offline, against GitHub (every open finding in a unit or set
+aside). It notes a file that many units change and the schedule doesn't list as shared, and a
+dependency on a finding no unit holds.
+
+`next` says, for each unit in order, whether it is merged, open, can start, can start on top of one
+open unit, or what it waits on. A unit waits on an earlier unit it depends on, one that holds a
+finding one of its own depends on, and one it shares a file with; two units that share only the
+schedule's shared files don't wait, unless a finding of one is related to, or depends on, a finding
+of the other in such a file. A unit's state is its pull request's, found by the marker
+`<!-- remediation CR1 U07 -->` in its description, and --started names units begun with no pull
+request yet.
+
+`guard` compares the files a unit's branch changed since <ref> with the unit's plan, and stops
+(exit 1) on a file outside it that another unmerged unit claims, unless it is a shared file.
+`unscheduled` lists the open findings the schedule doesn't hold.
 
 It reads GitHub through the gh CLI and writes nothing there. Python 3 standard library, and the
 review skill's file_review.py for the config, the schema checker and the sweep's names.
@@ -56,6 +72,7 @@ SCHEMA = HERE / "schedule.schema.json"
 SORT_SCHEMA = HERE / "sort.schema.json"
 FINDINGS_FILE = "findings.json"
 SORTED_FILE = "sorted.json"
+DECIDED_FILE = "decided.jsonl"
 UNIT_MARKER = re.compile(r"<!-- remediation (\S+) (\S+) -->")
 SEVERITY = re.compile(r"^(?:\[[^\]\n]*\] )?severity (High|Med|Low)\b")
 SEVERITIES = ("High", "Med", "Low")
@@ -182,25 +199,45 @@ def unit_states(config, name):
 
 # ---- gather ----
 
+def step_file(f):
+    """The file of a finding's step: findings-<area>.json, the step named by its area."""
+    return "findings-" + re.sub(r"[^A-Za-z0-9._-]", "-", f["area"] or "no-area") + ".json"
+
+
+def step_names(f):
+    """The names a finding's step goes by: its area, and the number of the step's issue."""
+    return {x for x in (f["area"], f["step"] and str(f["step"])) if x}
+
+
 def cmd_gather(config, pad):
     findings = [f for f in findings_of(config, sweep_issues(config)) if f["state"] == "open"]
     folder = pad / "triage"
     folder.mkdir(exist_ok=True)
     keep = ("number", "id", "title", "severity", "area", "step", "labels", "body", "comments")
-    (folder / FINDINGS_FILE).write_text(
-        json.dumps([{k: f[k] for k in keep} for f in findings], indent=1) + "\n", encoding="utf-8")
+    kept = [{k: f[k] for k in keep} for f in findings]
+    (folder / FINDINGS_FILE).write_text(json.dumps(kept, indent=1) + "\n", encoding="utf-8")
+    # One file a step as well, named by its area, so a sort piece reads its own step and no more.
+    for old in folder.glob("findings-*.json"):
+        old.unlink()
+    steps = {}
+    for f in kept:
+        steps.setdefault(step_file(f), []).append(f)
+    for name, of_step in steps.items():
+        (folder / name).write_text(json.dumps(of_step, indent=1) + "\n", encoding="utf-8")
     counts = ", ".join(f"{sum(1 for f in findings if f['severity'] == s)} {s}" for s in SEVERITIES)
     unrated = sum(1 for f in findings if f["severity"] is None)
     print(f"wrote {folder / FINDINGS_FILE}: {len(findings)} open findings ({counts}"
-          + (f", {unrated} with no severity" if unrated else "") + ")")
+          + (f", {unrated} with no severity" if unrated else "") + f"), and {len(steps)} "
+          f"file{'' if len(steps) == 1 else 's'} of one step each (findings-<area>.json)")
     return 0
 
 
 # ---- sorted ----
 
 def read_lines(path, kind, schemas):
-    """([(where, record)], problems) of a sort piece's file (kind "sort") or the checker's
-    ("check"): each line JSON, of its schema, and a sort line with what its readiness calls for."""
+    """([(where, record)], problems) of a sort piece's file (kind "sort"), the checker's ("check")
+    or the decided records' ("decided"): each line JSON, of its schema, and a record with what
+    its readiness calls for."""
     records, problems = [], []
     try:
         text = path.read_text(encoding="utf-8")
@@ -216,13 +253,16 @@ def read_lines(path, kind, schemas):
             problems.append(f"{where}: not JSON ({e.msg})")
             continue
         try:
-            fr.check_schema(r, schemas[kind], where)
+            fr.check_schema(r, schemas["check" if kind == "check" else "sort"], where)
         except fr.Refused as e:
             problems.append(str(e))
             continue
-        if kind == "sort":
+        if kind != "check":
             what = f"{where}: #{r['finding']}"
-            if r["readiness"] == "choice" and "ask" not in r:
+            if kind == "decided" and r["readiness"] == "choice":
+                problems.append(f"{what} is still a choice: a decided record is what the owner's "
+                                "decision made of it")
+            elif r["readiness"] == "choice" and "ask" not in r:
                 problems.append(f"{what} is a choice with no ask: the question, the options and "
                                 "the recommendation")
             if r["readiness"] != "choice" and "ask" in r:
@@ -237,12 +277,16 @@ def read_lines(path, kind, schemas):
 
 
 def kind_of(path):
+    if path.name == DECIDED_FILE:
+        return "decided"
     return "check" if path.name.startswith("check") else "sort"
 
 
-def cmd_sorted(pad, files):
+def cmd_sorted(pad, files, steps):
     schemas = fr.load_json(SORT_SCHEMA, "schema")["$defs"]
     if files:  # a piece's own check: the lines of the files named, and no more
+        if steps:
+            raise fr.Refused("sorted: --step checks whole steps; it goes with no file named")
         failed = False
         for path in map(Path, files):
             records, problems = read_lines(path, kind_of(path), schemas)
@@ -254,56 +298,78 @@ def cmd_sorted(pad, files):
         return 1 if failed else 0
     folder = pad / "triage"
     findings = {f["number"]: f for f in fr.load_json(folder / FINDINGS_FILE, "findings")}
+    # The findings held to the check: every gathered one, or those of the steps named. A record
+    # may name any gathered finding, whatever its step.
+    wanted = set(findings)
+    if steps:
+        for s in steps:
+            if not any(s in step_names(f) for f in findings.values()):
+                raise fr.Refused(f"--step {s}: no gathered finding is of that step; a step is "
+                                 "named by its area or by its issue's number")
+        wanted = {n for n, f in findings.items() if step_names(f) & set(steps)}
     paths = sorted(folder.glob("sort-*.jsonl")) + sorted(folder.glob("check*.jsonl"))
     if not any(kind_of(p) == "sort" for p in paths):
         raise fr.Refused(f"{folder}: no sort-*.jsonl file; the sort's pieces write them")
-    lines, problems = {"sort": {}, "check": {}}, []
+    if (folder / DECIDED_FILE).is_file():
+        paths.append(folder / DECIDED_FILE)
+    lines, problems = {"sort": {}, "check": {}, "decided": {}}, []
     for path in paths:
         records, bad = read_lines(path, kind_of(path), schemas)
         problems += bad
         for where, r in records:
             lines[kind_of(path)].setdefault(r["finding"], []).append((where, r))
-    for kind, what in (("sort", "sorted"), ("check", "judged by the checker")):
+    for kind, what in (("sort", "sorted"), ("check", "judged by the checker"),
+                       ("decided", "decided")):
         for n, got in sorted(lines[kind].items()):
             if n not in findings:
                 problems.append(f"{got[0][0]}: #{n} is no finding of {FINDINGS_FILE}")
-            elif len(got) > 1:
+            elif n in wanted and len(got) > 1:
                 problems.append(f"#{n} is {what} {len(got)} times ("
                                 + ", ".join(w for w, _ in got) + ")")
-    for n, f in sorted(findings.items()):
+    for n in sorted(wanted):
         if n not in lines["sort"]:
             problems.append(f"#{n} has no sort record")
-        elif f["severity"] in ("High", "Med") and n not in lines["check"]:
-            problems.append(f"#{n} ({f['severity']}) has no line of the checker's")
-    for n, got in sorted(lines["sort"].items()):
-        for where, r in got:
-            for m in r.get("depends_on", []) + r.get("related", []):
-                if m not in findings:
-                    problems.append(f"{where}: #{n} names #{m}, which is no finding of "
-                                    f"{FINDINGS_FILE}")
+        elif findings[n]["severity"] in ("High", "Med") and n not in lines["check"]:
+            problems.append(f"#{n} ({findings[n]['severity']}) has no line of the checker's")
+    for kind in ("sort", "decided"):
+        for n, got in sorted(lines[kind].items()):
+            for where, r in got if n in wanted else []:
+                for m in r.get("depends_on", []) + r.get("related", []):
+                    if m not in findings:
+                        problems.append(f"{where}: #{n} names #{m}, which is no finding of "
+                                        f"{FINDINGS_FILE}")
     for line in problems:
         print(f"problem: {line}", file=sys.stderr)
-    out, differ, counts = [], 0, {}
-    for n in sorted(set(findings) & set(lines["sort"])):
+    out, differ, decided, counts = [], 0, 0, {}
+    for n in sorted(wanted & set(lines["sort"])):
         r = dict(lines["sort"][n][0][1])
         judged = lines["check"].get(n)
+        settled = lines["decided"].get(n)
         if judged:
             r["checker"] = {k: judged[0][1][k] for k in ("readiness", "note")}
             if r["checker"]["readiness"] != r["readiness"]:
                 # They differ: the finding is the owner's choice, whichever of them said what.
                 differ += 1
-                print(f"differs: #{n} is \"{r['readiness']}\" to the sorter and "
-                      f"\"{r['checker']['readiness']}\" to the checker: a choice"
-                      + ("" if "ask" in r else ", whose ask is still to write"))
+                if not settled:
+                    print(f"differs: #{n} is \"{r['readiness']}\" to the sorter and "
+                          f"\"{r['checker']['readiness']}\" to the checker: a choice"
+                          + ("" if "ask" in r else ", whose ask is still to write"))
                 r["sorted_as"], r["readiness"] = r["readiness"], "choice"
+        if settled:
+            # The owner has decided: the record made of the decision stands in the sorter's place.
+            decided += 1
+            r = dict(settled[0][1], decided=True)
         counts[r["readiness"]] = counts.get(r["readiness"], 0) + 1
         out.append(r)
-    print(f"{len(out)} of {len(findings)} findings sorted: "
+    print(f"{len(out)} of {len(wanted)} findings sorted"
+          + (f" (of {', '.join(steps)} alone)" if steps else "") + ": "
           + ", ".join(f"{counts.get(k, 0)} {k}" for k in ("ready", "choice", "check", "not now"))
-          + f"; the checker differs on {differ}; "
+          + f"; the checker differs on {differ}; {decided} decided; "
           + (f"{len(problems)} problems" if problems else "no problems"))
     if problems:
         return 1
+    if steps:  # a look at some steps: the whole check writes what the schedule is made from
+        return 0
     (folder / SORTED_FILE).write_text(json.dumps(out, indent=1) + "\n", encoding="utf-8")
     print(f"wrote {folder / SORTED_FILE}")
     return 0
@@ -312,8 +378,8 @@ def cmd_sorted(pad, files):
 # ---- check ----
 
 def problems_within(schedule, config):
-    """What is wrong with the schedule read on its own."""
-    out = []
+    """What is wrong with the schedule read on its own, and what is worth a note."""
+    out, notes = [], []
     units = schedule["units"]
     records, seen_records = {}, set()
     for r in schedule["findings"]:
@@ -333,6 +399,20 @@ def problems_within(schedule, config):
     aside = {s["finding"] for s in schedule.get("set_aside", [])}
     for n in sorted(aside & set(place)):
         out.append(f"#{n} is set aside and in {place[n]}")
+    changed, at = {}, config["shared_at"]
+    for u in units:
+        for f in u["files"]:
+            changed.setdefault(f, []).append(u["id"])
+    shared = schedule.get("shared_files", [])
+    for f in shared:
+        n = len(changed.get(f, []))
+        if n < at:
+            out.append(f"{f} is listed as shared and {n} unit{' changes' if n == 1 else 's change'}"
+                       f" it: a shared file is one that {at} or more change")
+    for f, ids in sorted(changed.items()):
+        if len(ids) >= at and f not in shared:
+            notes.append(f"{f} is changed by {len(ids)} units ({', '.join(ids)}) and is not listed "
+                         "as shared: they run one after another")
     for k, u in enumerate(units):
         for d in u.get("depends_on", []):
             if d not in order:
@@ -359,12 +439,13 @@ def problems_within(schedule, config):
                 elif d in place and order[place[d]] > k:
                     out.append(f"#{n}, in {u['id']}, depends on #{d}, which is in the later "
                                f"{place[d]}")
-    return out, place, aside
+                elif d not in place:
+                    notes.append(f"#{n}, in {u['id']}, depends on #{d}, which no unit holds")
+    return out, place, aside, notes
 
 
 def cmd_check(config, schedule, offline):
-    out, place, aside = problems_within(schedule, config)
-    notes = []
+    out, place, aside, notes = problems_within(schedule, config)
     if not offline:
         findings = {f["number"]: f for f in findings_of(config, sweep_issues(config))}
         for n in sorted(to_schedule(config, findings.values()) - set(place) - aside):
@@ -390,17 +471,45 @@ def cmd_check(config, schedule, offline):
 
 # ---- next ----
 
-def waits(units, merged):
-    """{unit id: {an earlier unit not merged: why the unit waits on it}}: it depends on it, or they
-    share a file."""
+def linked(a, b):
+    """Whether two findings' records name one another: related, or one depends on the other."""
+    return b["finding"] in a.get("related", []) + a.get("depends_on", []) \
+        or a["finding"] in b.get("related", []) + b.get("depends_on", [])
+
+
+def between(e, u, records, shared):
+    """Why the unit u can't run beside the earlier unit e, or None when it can. A finding of u
+    depends on one of e; they share a file that isn't one of the schedule's shared files; or they
+    share a shared file in which a finding of one is related to, or depends on, one of the other."""
+    for n in u["findings"]:
+        for d in records.get(n, {}).get("depends_on", []):
+            if d in e["findings"]:
+                return f"#{n} depends on #{d}"
+    common = sorted(set(e["files"]) & set(u["files"]))
+    own = [f for f in common if f not in shared]
+    if own:
+        return f"they share {own[0]}" + (f" and {len(own) - 1} more" if len(own) > 1 else "")
+    for f in common:
+        mine = [records[n] for n in u["findings"] if f in records.get(n, {}).get("files", [])]
+        for a in (records[n] for n in e["findings"] if f in records.get(n, {}).get("files", [])):
+            for b in mine:
+                if linked(a, b):
+                    return f"#{a['finding']} and #{b['finding']} are related and both change {f}"
+    return None
+
+
+def waits(schedule, merged):
+    """{unit id: {an earlier unit not merged: why the unit waits on it}}: it depends on it, or
+    they can't run side by side (see `between`)."""
+    units, shared = schedule["units"], set(schedule.get("shared_files", []))
+    records = {r["finding"]: r for r in schedule["findings"]}
     out = {}
     for k, u in enumerate(units):
         why = {d: "it depends on it" for d in u.get("depends_on", []) if d not in merged}
         for e in units[:k]:
-            shared = sorted(set(e["files"]) & set(u["files"]))
-            if shared and e["id"] not in merged:
-                more = f" and {len(shared) - 1} more" if len(shared) > 1 else ""
-                why.setdefault(e["id"], f"they share {shared[0]}{more}")
+            reason = e["id"] not in merged and between(e, u, records, shared)
+            if reason:
+                why.setdefault(e["id"], reason)
         out[u["id"]] = why
     return out
 
@@ -419,7 +528,8 @@ def cmd_next(config, schedule, started):
     label = config["refine_label"]
     refine = {f["number"] for f in findings_of(config, sweep_issues(config))
               if f["state"] == "open" and label in f["labels"]}
-    why = waits(units, merged)
+    why = waits(schedule, merged)
+    shared = set(schedule.get("shared_files", []))
     limit = config["open_units"]
     room, can = limit - len(opened), 0
     lines = []
@@ -447,8 +557,15 @@ def cmd_next(config, schedule, started):
                 line = f"waits for a place: the limit is {limit} open units"
             else:
                 room, can = room - 1, can + 1
+                # The open units it shares a shared file with: it takes the target in as they merge.
+                beside = [e["id"] for e in units if e["id"] in opened and e["id"] not in blockers
+                          and set(e["files"]) & set(u["files"]) & shared]
                 line = "can start" + (f" on top of {only} ({blockers[only]}){on_top}"
                                       if only else "")
+                if beside:
+                    line += (f"; it shares a shared file with {', '.join(beside)} and takes the "
+                             "target in when " + ("that merges" if len(beside) == 1
+                                                  else "each merges"))
         lines.append(f"{uid} {u['name']}: {line}")
     print(f"{schedule['sweep']}: {len(units)} units: {len(merged)} merged, {len(opened)} open, "
           f"{can} can start")
@@ -473,7 +590,9 @@ def cmd_guard(config, schedule, path, uid, base):
     for f in outside:
         claimed = [o["id"] for o in schedule["units"] if o["id"] != uid and f in o["files"]
                    and states.get(o["id"], {}).get("state") != "merged"]
-        if claimed:
+        if f in schedule.get("shared_files", []):
+            print(f"outside the plan: {f} (a shared file: add it to {uid}'s files)")
+        elif claimed:
             stopped = True
             print(f"stop: {f} is outside {uid}'s plan, and {', '.join(claimed)} "
                   f"claim{'s' if len(claimed) == 1 else ''} it", file=sys.stderr)
@@ -488,7 +607,7 @@ def cmd_guard(config, schedule, path, uid, base):
 # ---- unscheduled ----
 
 def cmd_unscheduled(config, schedule):
-    _, place, aside = problems_within(schedule, config)
+    _, place, aside, _ = problems_within(schedule, config)
     findings = findings_of(config, sweep_issues(config))
     missing = to_schedule(config, findings) - set(place) - aside
     left = [f for f in findings if f["number"] in missing]
@@ -517,18 +636,23 @@ def main(argv=None):
                         "request yet, separated by commas")
     parser.add_argument("--offline", action="store_true",
                         help="check: the schedule alone, without reading GitHub")
+    parser.add_argument("--step", default="", help="sorted: check these steps alone, each named "
+                        "by its area or its issue's number, separated by commas")
     args = parser.parse_args(argv)
     try:
         config = fr.load_config(args.config)
+        steps = [s for s in args.step.split(",") if s]
+        if steps and args.command != "sorted":
+            raise fr.Refused(f"{args.command} takes no --step")
         if args.command == "sorted" and (args.args or args.pad):
             pad = Path(args.pad or ".")  # the files named, or the pad named: no sweep is needed
             if not args.args and not (pad / "triage").is_dir():
                 raise fr.Refused(f"work pad {pad}: no triage folder; gather makes it")
-            return cmd_sorted(pad, args.args)
+            return cmd_sorted(pad, args.args, steps)
         number = sweep_number(config, args.sweep)
         fr.name_review(config, number)
         if args.command == "sorted":
-            return cmd_sorted(Path(f"review/{number}"), [])
+            return cmd_sorted(Path(f"review/{number}"), [], steps)
         if args.command != "guard" and args.args:
             raise fr.Refused(f"{args.command} takes no argument")
         if args.command == "gather":

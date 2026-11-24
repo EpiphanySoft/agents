@@ -45,7 +45,7 @@
             "type": "array",
             "items": {"type": "string", "minLength": 1},
             "uniqueItems": true,
-            "description": "Every file the unit's fixes change: code, tests, requirement sections, shared test data. Paths from the repository's root. Two units that share a file never run side by side."
+            "description": "Every file the unit's fixes change: code, tests, requirement sections, shared test data. Paths from the repository's root. Two units that share a file never run side by side, unless the file is one of the schedule's shared_files."
           },
           "depends_on": {
             "type": "array",
@@ -95,7 +95,7 @@
             "type": "array",
             "items": {"type": "integer", "minimum": 1},
             "uniqueItems": true,
-            "description": "Optional. The findings that change the same function or turn on the same rule, without one having to come first: they are batched together where they fit, and asked together where they are choices."
+            "description": "Optional. The findings that change the same function or turn on the same rule, without one having to come first, and a finding whose ruling by the owner this one waits on: they are batched together where they fit, and asked together where they are choices. In a shared file, two related findings keep their units from running side by side."
           },
           "size": {
             "type": "string",
@@ -114,6 +114,12 @@
           }
         }
       }
+    },
+    "shared_files": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true,
+      "description": "Optional. The files many units change (the project's shared_at or more), paths from the repository's root. Two units that share only these may run side by side, unless a finding of one is related to, or depends on, a finding of the other in the file."
     },
     "set_aside": {
       "type": "array",

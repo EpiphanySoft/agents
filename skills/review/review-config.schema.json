@@ -71,6 +71,11 @@
       "minimum": 1,
       "description": "Optional, 3 when left out. The most work units open at once: started and not yet merged."
     },
+    "shared_at": {
+      "type": "integer",
+      "minimum": 2,
+      "description": "Optional, 3 when left out. How many work units change a file before the schedule may list it as shared: two units that share only shared files may run side by side."
+    },
     "text_check": {
       "type": "string",
       "pattern": "\\{file\\}",
