@@ -15,7 +15,8 @@ It serves three goals, and every choice the coordinator makes while scheduling i
     What comes up later follows a standing rule, or is set aside without stopping the work.
 2. **As far as possible within the limits.** Units run side by side wherever their files allow and
     the project's limits permit.
-3. **No collisions.** Two units that change the same file never run side by side.
+3. **No collisions.** Two units that change the same file never run side by side, unless the file
+    is one the schedule lists as shared and their findings in it are unrelated (*Shared files*).
 
 The skill has two parts. **Triage** ends at a schedule the owner has approved; it changes no code and
 no requirement. **Running the schedule** is how each unit goes from branch to merge, and how the
@@ -34,6 +35,7 @@ In its review config, `docs/review.json`, beside what the `review` skill reads t
 | `schedule` | `docs/remediation/{sweep}-schedule.json` | where a sweep's schedule is kept |
 | `unit_size` | 20 | the most findings a unit holds without giving a reason |
 | `open_units` | 3 | the most units open at once: started and not yet merged |
+| `shared_at` | 3 | how many units change a file before the schedule lists it as shared |
 | `question_label` | `question` | a question issue |
 | `refine_label` | `refine` | a finding that waits on the owner's decision |
 | `dismiss_label` | `dismiss` | a finding the work showed to be no defect |
@@ -64,7 +66,7 @@ piece, its model and effort, and this skill:
 
 | Piece | Reads | Writes |
 |---|---|---|
-| **a sort piece** | at most about 40 findings of one area step, from `triage/findings.json`, and the code they cite | `triage/sort-<step>.jsonl`, with `-<k>` when a step is split |
+| **a sort piece** | at most about 40 findings of one area step, from the step's file `triage/findings-<area>.json`, and the code they cite | `triage/sort-<area>.jsonl`, with `-<k>` when a step is split |
 | **the checker** | the High and Med findings alone, blind to the sort | `triage/check.jsonl`: its readiness for each |
 | **a unit** | its entry in the schedule, its findings' issues, the project's rules for a fix | its branch and its pull request |
 | **a `pr-review` pass** | as that skill says | as that skill says |
@@ -127,6 +129,9 @@ members and collaborators, where a decision is recorded. The issues are the reco
 closed, decided or filed since the review is read as it now stands. The anchor, the steps and their
 parts, and question issues are no findings.
 
+It writes them once more a step, as `triage/findings-<area>.json`: a step is named by its area, so
+a step in parts is one file. A sort piece reads its own step's file and no more.
+
 ## Sort
 
 Each finding gets a record:
@@ -156,15 +161,30 @@ the other options would change. The coordinator rewrites the record once the own
     implementer's, the finding is a `choice`. A question asked up front costs the owner a minute; one
     found mid-work stalls a unit.
 - **Judged from the stated remedy.** Nearly every finding lists alternatives, and that alone makes
-    none of them a choice. A finding is `ready` when its stated remedy leaves what the requirements
-    say and what the user sees in ordinary use as they are, even when a listed alternative
-    wouldn't: the unit takes the remedy, and taking such an alternative later is a `refine`. A
-    choice between two ways to get the same behaviour is the implementer's.
-- **A choice is the owner's** when the stated remedy itself changes what the user sees or what a
-    requirement says; when the finding gives no remedy it prefers, or says in its own words that
-    the choice is the owner's; when it waits on a question issue that is still open; or when it
-    asks whether to build, write down or remove something. That last one is a `choice` even when
-    the likely answer is "later": taking the text out of the requirements is a change made now.
+    none of them a choice. A finding is `ready` when its stated remedy is one of these, even when a
+    listed alternative isn't: the unit takes the remedy, and taking such an alternative later is a
+    `refine`.
+    - It makes the code do what a requirement already says, however visible the change.
+    - It adds only small interface in a pattern the application already has: a message, a toast, a
+        tooltip, a disabled state. The unit lists each one under **Needs your eye**, where the
+        owner can still object.
+    - It leaves what the requirements ask as it is, or corrects their text without changing what
+        they ask: a stale reference, a wrong name.
+
+    A choice between two ways to get the same behaviour is the implementer's.
+- **A choice is the owner's** when the stated remedy adds a control, a dialog, a setting or a screen
+    that no requirement describes; when it changes what a requirement asks; when the finding gives
+    no remedy it prefers, or says in its own words that the choice is the owner's; when it waits on
+    a question issue that is still open; or when it asks whether to build, write down or remove
+    something. That last one is a `choice` even when the likely answer is "later": taking the text
+    out of the requirements is a change made now.
+- **Several parts, one of them the owner's.** A finding is one record, however many parts it has.
+    When only a part of it is the owner's to choose, the finding is a `choice`: its `ask` covers
+    that part alone, and its `note` names the parts that are ready as they stand.
+- **Waiting on another finding's ruling.** A finding, or a part of one, that can't be settled until
+    the owner has decided another finding names that finding under `related` and says so in its
+    `note`. The two are asked together, and the record is written once both are decided.
+    `depends_on` is for a fix that must come first.
 - **Decided is ready.** A finding that carries the owner's decision, in its body or in a comment,
     is sorted with that decision as its remedy.
 - **`not now`** is the sorter's own proposal that nothing be done in this sweep, and that nothing
@@ -192,8 +212,14 @@ file to the schema; every gathered finding sorted once, and every High and Med o
 the checker; a choice with its question, a `not now` with its reason; and every finding a record
 names a gathered one. It lists where the checker differs from the sorter, and writes
 `triage/sorted.json`: each finding's record with that settled, a differing one as a `choice` whose
-question the coordinator writes. The owner's choices, the batching and the schedule are made from
+question the coordinator writes into the finding's line of the sort file. The owner's choices, the batching and the schedule are made from
 that file, never from a piece's summary.
+
+**A step at a time.** As a step's pieces end, `triage.py sorted --step <area>` holds that step's
+findings alone to the same check, so a mistake shows when its step ends and not when the whole sort
+does. A record may still name a finding of any step. It writes nothing: the whole check passes
+before the walk thru, and a schedule is always made of the whole sweep, since findings of
+different steps are fixed by the same change and change the same files.
 
 ## The owner's choices
 
@@ -207,10 +233,15 @@ The schedule is only as stable as the decisions under it.
 - **Labelled while they wait.** When the sort ends the coordinator gives each finding sorted as a
     `choice` the `refine` label, so the repository shows what waits on the owner.
 - **Recorded.** After the walk thru's final approval, each decision goes on its finding as a
-    comment, the `refine` label comes off, and the coordinator rewrites the finding's record as
-    `ready` with the files, size and proof of what was decided. A finding the owner sets aside
-    for later goes to the project's later work; one that is no defect gets `dismiss` and is the
-    owner's to close.
+    comment and the `refine` label comes off. The coordinator writes the finding's record anew, as
+    `ready` with the files, size and proof of what was decided, as a line of
+    `triage/decided.jsonl`. `triage.py sorted` holds that file to the sort's schema and lays its
+    records over the pieces' in `sorted.json`, so a decision outlasts the next run and the next
+    session. A finding the owner sets aside for later goes to the project's later work; one that
+    is no defect gets `dismiss` and is the owner's to close.
+- **A decision that settles another finding.** When a decision is also the remedy of a finding
+    elsewhere, in any step, it is recorded on that finding too, as a comment that points at the
+    first, and the two go in one unit.
 
 ## Batch
 
@@ -238,6 +269,24 @@ Units are ordered by:
 
 Inside a unit, findings are fixed most severe first.
 
+## Shared files
+
+Some files are changed by many units: a module every screen calls, a test file many fixes add to.
+Held to one unit at a time, such a file turns the schedule into one long chain. So the schedule
+lists its **shared files**: the files that `shared_at` units or more change (3 by default), test
+files included.
+
+- Two units that share only shared files may run side by side, unless a finding of one is related
+    to, or depends on, a finding of the other in such a file (the records' `related` and
+    `depends_on`): those change the same code.
+- Every other file keeps the rule: two units that change it never run side by side.
+- Two units side by side on a shared file can still conflict now and then. The later one to merge
+    settles it, with no trip to the owner (*A unit, from branch to merge*).
+
+`check` refuses a listed file that fewer units change, and notes a file that many units change and
+the list leaves out: the coordinator may leave one out, to keep its units one after another. The
+owner sees the list when approving the schedule.
+
 ## The schedule
 
 The schedule is one JSON file per sweep, at the project's `schedule` path, checked against
@@ -246,6 +295,7 @@ The schedule is one JSON file per sweep, at the project's `schedule` path, check
 - **`units`**, in their order: each one's `id` ("U07"), `name`, `findings` (issue numbers), `files`
     (every file its fixes change) and, where it has them, `depends_on` and `oversize`;
 - **`findings`**: each finding's record from the sort;
+- **`shared_files`**: the files many units change (*Shared files*);
 - **`set_aside`**: the open findings no unit holds, each with the reason.
 
 It holds the plan and nothing else. **Progress is read from GitHub**: a unit is open while its pull
@@ -254,7 +304,9 @@ never goes stale, and no pull request is made to tick a box.
 
 `triage.py check` holds a schedule to its rules: every open finding is in exactly one unit or set
 aside; every finding in a unit has its record, and is ready or needs a check; a unit's files hold its
-findings' files; a dependency is on an earlier unit; no unit is over the limit without its reason.
+findings' files; a dependency is on an earlier unit; no unit is over the limit without its reason;
+a shared file is one that `shared_at` units or more change. It notes a dependency on a finding no
+unit holds.
 
 The schedule reaches the target branch as a pull request the owner reads and merges: that merge is
 the approval, and Part 1 ends there.
@@ -265,8 +317,9 @@ the approval, and Part 1 ends there.
 
 A unit may start when all of these hold:
 
-1. every earlier unit that shares a file with it is merged;
-2. every unit it depends on is merged;
+1. every earlier unit that shares a file with it is merged, shared files aside (*Shared files*);
+2. every unit it depends on is merged, and every earlier unit that holds a finding one of its own
+    depends on;
 3. none of its findings carries the `refine` label;
 4. fewer than `open_units` units are open.
 
@@ -284,18 +337,22 @@ after the first has merged and it has taken the target branch in by a merge, nev
     fix. It fixes most severe first.
 2. **The guard**, before the pull request opens and before each push after: `triage.py guard <unit>
     --base <ref>` compares the files the branch changed with the unit's `files`. A file outside the
-    plan that another unmerged unit claims stops the unit until the schedule is corrected. A file no
-    other unit claims is added to the unit's `files`.
+    plan that another unmerged unit claims stops the unit until the schedule is corrected, unless it
+    is a shared file. A shared file, or a file no other unit claims, is added to the unit's `files`.
 3. **The pull request** opens as a draft, with the sweep label, a "Closes #n" line for each finding
     it fixes, and the unit's marker at the end of its description: `<!-- remediation CR1 U07 -->`.
 4. **Ready for the owner** when all of these hold:
-    - CI is green;
+    - it has taken the target branch in, by a merge, since the last unit it shares a shared file
+        with merged; a conflict in that file was the unit's to resolve, and the description says
+        what was resolved;
+    - CI is green, on that merge where there was one;
     - a `pr-review` pass has run on a different model from the one that did the work, and everything
         it raised is fixed or answered;
     - every finding of the unit is closed by the pull request, or set aside with `refine`,
         `question` or `dismiss`, and the description lists each one with its commit and its test;
     - the description opens with **Needs your eye**: only the commits that change what the user
-        sees or what a requirement says.
+        sees or what a requirement says, the small interface the sort left to the implementer
+        among them.
 5. **The owner merges**, every unit. After the merge: confirm and cleanup (the shared `CLAUDE.md` PR
     terms), then `next`.
 
@@ -310,7 +367,7 @@ These are standing rules. None of them stops a unit to ask.
 | What comes up | What the unit does |
 |---|---|
 | **A finding won't reproduce** | A tests-only commit shows the behaviour is right. The evidence goes on the issue, the finding gets `dismiss`, and it leaves the unit's "Closes" lines. The owner closes it, or says the point stands. |
-| **The stated remedy is wrong, or an alternative fits better** | The implementer picks, and says so in the commit and on the issue, when what the user sees and what the requirement says are the same either way. When either differs, the finding gets `refine`. |
+| **The stated remedy is wrong, or an alternative fits better** | The implementer picks, and says so in the commit and on the issue, when the sort's rule would call the finding ready with what was picked (*Sort*, "Judged from the stated remedy"). Otherwise the finding gets `refine`. |
 | **A new finding** | It is always filed as an issue under its step, with the sweep and area labels. It is fixed in this unit only when it is small and in the unit's own files; otherwise the schedule takes it in. A High one is reported to the owner at once. |
 | **Something new for the owner** | A finding's own choice makes it `refine`. Anything else, a wider rule or something no finding covers, is a new question issue under its step (`file_review.py question`). |
 
@@ -358,7 +415,7 @@ the repository's root:
 
 ```
 python3 <skill>/triage.py gather      [--sweep CR1] [--pad review/<N>]
-python3 <skill>/triage.py sorted [<file> ...] [--sweep CR1] [--pad review/<N>]
+python3 <skill>/triage.py sorted [<file> ...] [--step <area>,...] [--sweep CR1] [--pad review/<N>]
 python3 <skill>/triage.py check       [--sweep CR1] [--schedule <file>] [--offline]
 python3 <skill>/triage.py next        [--sweep CR1] [--schedule <file>] [--started U08,U09]
 python3 <skill>/triage.py guard <unit> --base <ref> [--sweep CR1] [--schedule <file>]
@@ -370,8 +427,15 @@ python3 <skill>/triage.py unscheduled [--sweep CR1] [--schedule <file>]
 - **A unit's state** is its pull request's, found by the unit's marker in its description; one
     closed without a merge counts for nothing. `--started` names units begun with no pull request
     yet, such as one started on top of another.
+- **`gather`** writes `findings.json`, and the same findings a step as `findings-<area>.json`.
 - **`sorted`** reads the work pad's `triage/` folder: `findings.json`, every `sort-*.jsonl` and
-    `check*.jsonl`. With files named it checks their lines alone, and needs no sweep.
+    `check*.jsonl`, and `decided.jsonl` when there is one. With files named it checks their lines
+    alone, and needs no sweep. With `--step` it holds those steps' findings alone to the whole
+    check, each step named by its area or its issue's number, and writes nothing.
+- **`check`** prints a note for what is worth a look and no problem: a file many units change that
+    isn't listed as shared, and a dependency on a finding no unit holds.
+- **`next`** says of a unit that can start which open units it shares a shared file with: it takes
+    the target in as each merges.
 - **`check --offline`** checks the schedule against its schema and itself, without GitHub.
 - **Exit status**: 0 done; 1 the sort or the schedule has problems, a guard stopped, or a `gh` or
     `git` call failed; 2 refused (a bad config, schedule or argument).

@@ -167,6 +167,23 @@ class TriageTest(unittest.TestCase):
                          ["**Decision:** the limit is inclusive.", "Confirmed by a test."])
         self.assertEqual(by[11]["comments"], [])
 
+    def test_gather_writes_one_file_a_step_as_well(self):
+        folder = self.root / "review" / "1" / "triage"
+        folder.mkdir()
+        (folder / "findings-gone.json").write_text("[]")  # a step with nothing open any more
+        done = self.run_script("gather")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("and 2 files of one step each (findings-<area>.json)", done.stdout)
+        # A step is named by its area, so a step in parts is one file.
+        self.assertEqual(sorted(x.name for x in folder.glob("findings-*.json")),
+                         ["findings-core.json", "findings-docs.json"])
+        core = json.loads((folder / "findings-core.json").read_text())
+        self.assertEqual([f["number"] for f in core], [10, 11, 12, 17])
+        whole = {f["number"]: f for f in json.loads((folder / "findings.json").read_text())}
+        self.assertEqual(core[0], whole[10])
+        docs = json.loads((folder / "findings-docs.json").read_text())
+        self.assertEqual([f["number"] for f in docs], [13, 14, 18])
+
     def test_gather_needs_the_anchor_and_a_work_pad(self):
         self.issues[0]["body"] = "No marker."
         done = self.run_script("gather")
@@ -209,7 +226,7 @@ class TriageTest(unittest.TestCase):
         self.assertIn('differs: #11 is "ready" to the sorter and "choice" to the checker: a choice, '
                       "whose ask is still to write", done.stdout)
         self.assertIn("7 of 7 findings sorted: 4 ready, 2 choice, 0 check, 1 not now; the checker "
-                      "differs on 1; no problems", done.stdout)
+                      "differs on 1; 0 decided; no problems", done.stdout)
         got = {r["finding"]: r for r in json.loads((folder / "sorted.json").read_text())}
         self.assertEqual(sorted(got), [10, 11, 12, 13, 14, 17, 18])
         self.assertEqual((got[11]["readiness"], got[11]["sorted_as"],
@@ -219,6 +236,64 @@ class TriageTest(unittest.TestCase):
         self.assertNotIn("sorted_as", got[10])
         self.assertNotIn("checker", got[12])  # a Low finding: the checker doesn't judge it
         self.assertEqual(got[13]["ask"], self.ASK)
+
+    def test_sorted_checks_the_steps_named_alone(self):
+        # Only the core step's piece has ended. Its records may name a finding of any step.
+        folder = self.sort_files(
+            sort={"core": [record(10, "src/core.py", related=[13]), record(11, "src/log.py"),
+                           record(12, "src/core.py", depends_on=[10]),
+                           record(17, "tests/test_core.py")]},
+            check=[{"finding": 10, "readiness": "ready", "note": "The remedy is one line."},
+                   {"finding": 11, "readiness": "choice", "note": "It is the user's to see."}])
+        done = self.run_script("sorted")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("problem: #13 has no sort record", done.stderr)
+        for step in ("core", "2"):  # by its area, or by its issue's number
+            done = self.run_script("sorted", "--step", step)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("4 of 4 findings sorted (of " + step + " alone): 3 ready, 1 choice, "
+                          "0 check, 0 not now; the checker differs on 1; 0 decided; no problems",
+                          done.stdout)
+            self.assertIn('differs: #11 is "ready" to the sorter', done.stdout)
+        # The whole check writes what the schedule is made from; a look at some steps doesn't.
+        self.assertFalse((folder / "sorted.json").exists())
+        done = self.run_script("sorted", "--step", "core,docs")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("problem: #14 has no sort record", done.stderr)
+        for args, needle in ((("sorted", "--step", "ui"), "--step ui: no gathered finding is of "
+                              "that step"),
+                             (("sorted", "--step", "core", str(folder / "sort-core.jsonl")),
+                              "--step checks whole steps"),
+                             (("check", "--step", "core"), "check takes no --step")):
+            done = self.run_script(*args)
+            self.assertEqual(done.returncode, 2, done.stdout)
+            self.assertIn(needle, done.stderr)
+
+    def test_a_decided_record_stands_in_the_sorters_place(self):
+        folder = self.sort_files()
+        decided = [record(13, "docs/a.md", "src/core.py", note="Decided: the limit is inclusive."),
+                   record(11, "src/log.py", note="Decided: the token is never logged.")]
+        (folder / "decided.jsonl").write_text("".join(json.dumps(r) + "\n" for r in decided))
+        done = self.run_script("sorted")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("7 of 7 findings sorted: 6 ready, 0 choice, 0 check, 1 not now; the checker "
+                      "differs on 1; 2 decided; no problems", done.stdout)
+        self.assertNotIn("differs: #11", done.stdout)  # settled: nothing is left to write
+        got = {r["finding"]: r for r in json.loads((folder / "sorted.json").read_text())}
+        self.assertEqual(got[13], dict(decided[0], decided=True))  # no ask, and the decided files
+        self.assertEqual(got[11]["readiness"], "ready")
+        self.assertNotIn("decided", got[10])
+        # It is a record like any other: of the schema, once a finding, never still a choice.
+        bad = [record(13, "docs/a.md", readiness="choice", ask=self.ASK), record(11, "src/log.py"),
+               record(11, "src/log.py"), record(99, "src/x.py"), record(10, "src/core.py", size="xl")]
+        (folder / "decided.jsonl").write_text("".join(json.dumps(r) + "\n" for r in bad))
+        done = self.run_script("sorted")
+        self.assertEqual(done.returncode, 1)
+        for needle in ("decided.jsonl:1: #13 is still a choice",
+                       "#11 is decided 2 times (decided.jsonl:2, decided.jsonl:3)",
+                       "decided.jsonl:4: #99 is no finding of findings.json",
+                       "decided.jsonl:5.size"):
+            self.assertIn(needle, done.stderr)
 
     def sorted_problems(self, *needles, **files):
         folder = self.sort_files(**files)
@@ -344,6 +419,40 @@ class TriageTest(unittest.TestCase):
                       "#11, in U02, depends on #13, which is in the later U03",
                       "#11, in U02, depends on #18, which is set aside")
 
+    def busy(self):
+        """Make src/core.py a file all three units change, each by a finding of its own."""
+        for u in self.schedule["units"][1:]:
+            u["files"].append("src/core.py")
+        records = {r["finding"]: r for r in self.schedule["findings"]}
+        records[11]["files"].append("src/core.py")
+        records[13]["files"].append("src/core.py")
+        return records
+
+    def test_check_holds_the_shared_files_to_the_units_that_change_them(self):
+        self.busy()
+        done = self.run_script("check", "--offline")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("note: src/core.py is changed by 3 units (U01, U02, U03) and is not listed "
+                      "as shared: they run one after another", done.stdout)
+        self.schedule["shared_files"] = ["src/core.py"]
+        done = self.run_script("check", "--offline")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("note:", done.stdout)
+        # A file fewer units change is no shared file, whatever the list says.
+        self.problems(lambda s: s["shared_files"].extend(["src/log.py", "src/none.py"]),
+                      "src/log.py is listed as shared and 1 unit changes it: a shared file is one "
+                      "that 3 or more change",
+                      "src/none.py is listed as shared and 0 units change it", offline=True)
+        self.config["shared_at"] = 4
+        self.problems(lambda s: None, "src/core.py is listed as shared and 3 units change it: a "
+                      "shared file is one that 4 or more change", offline=True)
+
+    def test_check_notes_a_dependency_on_a_finding_no_unit_holds(self):
+        self.schedule["findings"][1]["depends_on"].append(99)
+        done = self.run_script("check", "--offline")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("note: #12, in U01, depends on #99, which no unit holds", done.stdout)
+
     def test_a_unit_over_the_size_limit_gives_its_reason(self):
         self.config["unit_size"] = 2
         done = self.run_script("check")
@@ -419,6 +528,45 @@ class TriageTest(unittest.TestCase):
             "U01 the limit check: merged (#40)",
             "U02 the log: can start",
             "U03 the documents: waits on U02 (it depends on it)"])
+
+    def test_units_that_share_only_a_shared_file_run_side_by_side(self):
+        records = self.busy()
+        self.assertEqual(self.next_lines()[1:], [  # by the file rule: one after another
+            "U01 the limit check: can start",
+            "U02 the log: waits on U01 (they share src/core.py)",
+            "U03 the documents: waits on U01 (they share src/core.py), U02 (they share "
+            "src/core.py)"])
+        self.schedule["shared_files"] = ["src/core.py"]
+        self.assertEqual(self.next_lines(), [
+            "CR1: 3 units: 0 merged, 0 open, 3 can start",
+            "U01 the limit check: can start",
+            "U02 the log: can start",
+            "U03 the documents: can start"])
+        # An open unit it shares the file with: it starts, and takes the target in at the merge.
+        self.pr(40, "U01")
+        self.pr(41, "U02")
+        self.assertEqual(self.next_lines()[3], "U03 the documents: can start; it shares a shared "
+                         "file with U01, U02 and takes the target in when each merges")
+        self.prs.clear()
+        # Unless a finding of one is related to, or depends on, one of the other in that file.
+        records[13]["related"] = [11]
+        self.assertEqual(self.next_lines()[3], "U03 the documents: waits on U02 (#11 and #13 are "
+                         "related and both change src/core.py)")
+        records[13]["related"] = [17]  # related, but #17 doesn't change the shared file
+        self.assertEqual(self.next_lines()[3], "U03 the documents: can start")
+        # Any other file they share still holds the later one back.
+        self.schedule["units"][2]["files"].append("src/log.py")
+        self.assertEqual(self.next_lines()[3],
+                         "U03 the documents: waits on U02 (they share src/log.py)")
+
+    def test_a_unit_waits_on_the_unit_that_holds_what_its_finding_depends_on(self):
+        records = {r["finding"]: r for r in self.schedule["findings"]}
+        records[11]["depends_on"] = [10]  # no file in common, and no unit names the other
+        self.assertEqual(self.next_lines()[1:3], [
+            "U01 the limit check: can start",
+            "U02 the log: waits on U01 (#11 depends on #10)"])
+        self.pr(40, "U01", "MERGED")
+        self.assertEqual(self.next_lines()[2], "U02 the log: can start")
 
     def test_a_unit_may_start_on_top_of_one_open_unit_one_deep(self):
         units = self.schedule["units"]
@@ -508,6 +656,17 @@ class TriageTest(unittest.TestCase):
             done = self.run_script(*args)
             self.assertEqual(done.returncode, 2)
             self.assertIn(needle, done.stderr)
+
+    def test_guard_lets_a_shared_file_into_a_units_changes(self):
+        self.commit("base", **{"src/core.py": "a\n", "src/log.py": "a\n"})
+        subprocess.run(["git", "-C", str(self.root), "branch", "base"], check=True)
+        self.commit("the fix", **{"src/core.py": "b\n", "src/log.py": "b\n"})
+        self.assertEqual(self.run_script("guard", "U01", "--base", "base").returncode, 1)
+        self.schedule["shared_files"] = ["src/log.py"]
+        done = self.run_script("guard", "U01", "--base", "base")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("outside the plan: src/log.py (a shared file: add it to U01's files)",
+                      done.stdout)
 
     # ---- unscheduled, and which sweep ----
 

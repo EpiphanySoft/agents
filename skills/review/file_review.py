@@ -206,6 +206,7 @@ def load_config(path):
     config.setdefault("schedule", "docs/remediation/{sweep}-schedule.json")
     config.setdefault("unit_size", 20)
     config.setdefault("open_units", 3)
+    config.setdefault("shared_at", 3)
     return config
 
 

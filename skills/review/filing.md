@@ -43,7 +43,7 @@ that doesn't match, naming the field (`config.prefix: must be string`).
 | `question_label` | optional | default `question`: a question issue |
 | `refine_label` | optional | default `refine`: a finding that is a choice for the owner, until the owner decides |
 | `dismiss_label` | optional | default `dismiss`: a finding the work showed to be no defect (the `review-triage` skill) |
-| `schedule`, `unit_size`, `open_units` | optional | the work schedule's path and limits, read by the `review-triage` skill's `triage.py` |
+| `schedule`, `unit_size`, `open_units`, `shared_at` | optional | the work schedule's path and limits, read by the `review-triage` skill's `triage.py` |
 | `text_check` | optional | a command with `{file}`, run on every title and body before posting; a non-zero exit stops the post |
 | `advisory_package` | optional | `{"ecosystem", "name"}` an advisory names; default `other` and the repository's name |
 
