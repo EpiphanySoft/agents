@@ -128,9 +128,12 @@ class TriageTest(unittest.TestCase):
         return subprocess.run([sys.executable, str(SCRIPT), *args], cwd=self.root, env=self.env,
                               capture_output=True, text=True)
 
-    def pr(self, n, uid, state="OPEN", sweep="CR1"):
+    def pr(self, n, uid, state="OPEN", sweep="CR1", on=None, says=""):
+        """A unit's pull request; with `on`, one whose description says it is stacked on #<on>."""
+        if on:
+            says = f"Stacked on #{on}: its own change starts after commit 1a2b3c4.\n\n"
         self.prs.append({"number": n, "state": state,
-                         "body": f"Fixes.\n\n<!-- remediation {sweep} {uid} -->\n"})
+                         "body": f"{says}Fixes.\n\n<!-- remediation {sweep} {uid} -->\n"})
 
     def label(self, n, name):
         next(i for i in self.issues if i["number"] == n)["labels"].append(name)
@@ -433,7 +436,7 @@ class TriageTest(unittest.TestCase):
         done = self.run_script("check", "--offline")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("note: src/core.py is changed by 3 units (U01, U02, U03) and is not listed "
-                      "as shared: they run one after another", done.stdout)
+                      "as shared: they start in the schedule's order", done.stdout)
         self.schedule["shared_files"] = ["src/core.py"]
         done = self.run_script("check", "--offline")
         self.assertEqual(done.returncode, 0, done.stderr)
@@ -529,31 +532,46 @@ class TriageTest(unittest.TestCase):
             "U02 the log: can start",
             "U03 the documents: waits on U02 (it depends on it)"])
 
-    def test_units_that_share_only_a_shared_file_run_side_by_side(self):
+    def test_units_that_share_only_a_shared_file_do_not_hold_one_another_back(self):
         records = self.busy()
-        self.assertEqual(self.next_lines()[1:], [  # by the file rule: one after another
+        self.assertEqual(self.next_lines()[1:], [  # by the file rule: in the schedule's order
             "U01 the limit check: can start",
             "U02 the log: waits on U01 (they share src/core.py)",
             "U03 the documents: waits on U01 (they share src/core.py), U02 (they share "
             "src/core.py)"])
         self.schedule["shared_files"] = ["src/core.py"]
-        self.assertEqual(self.next_lines(), [
+        too = "; it shares a shared file with {}, which can start too: the later to start is " \
+            "stacked on the earlier"
+        self.assertEqual(self.next_lines(), [  # any of them may start first, never side by side
             "CR1: 3 units: 0 merged, 0 open, 3 can start",
             "U01 the limit check: can start",
-            "U02 the log: can start",
-            "U03 the documents: can start"])
-        # An open unit it shares the file with: it starts, and takes the target in at the merge.
+            "U02 the log: can start" + too.format("U01"),
+            "U03 the documents: can start" + too.format("U01 and U02")])
+        # A shared file is a file: a unit is stacked on the open unit it shares one with, whichever
+        # comes first in the schedule.
+        self.pr(42, "U03")
+        self.assertEqual(self.next_lines()[1:], [
+            "U01 the limit check: can start stacked on U03 (they share src/core.py, a shared "
+            "file); it goes ready after U03 merges",
+            "U02 the log: can start stacked on U03 (they share src/core.py, a shared file); it "
+            "goes ready after U03 merges" + too.format("U01"),
+            "U03 the documents: open (#42)"])
+        self.prs.clear()
+        # Two open units side by side on it: no branch holds both, so the third waits.
         self.pr(40, "U01")
         self.pr(41, "U02")
-        self.assertEqual(self.next_lines()[3], "U03 the documents: can start; it shares a shared "
-                         "file with U01, U02 and takes the target in when each merges")
+        self.assertEqual(self.next_lines()[3], "U03 the documents: waits on U01 (they share "
+                         "src/core.py, a shared file), U02 (they share src/core.py, a shared file): "
+                         "both are open and neither is stacked on the other, so it can't be stacked "
+                         "on both")
         self.prs.clear()
-        # Unless a finding of one is related to, or depends on, one of the other in that file.
+        # A finding of one related to, or depending on, one of the other in that file holds it back.
         records[13]["related"] = [11]
         self.assertEqual(self.next_lines()[3], "U03 the documents: waits on U02 (#11 and #13 are "
                          "related and both change src/core.py)")
         records[13]["related"] = [17]  # related, but #17 doesn't change the shared file
-        self.assertEqual(self.next_lines()[3], "U03 the documents: can start")
+        self.assertEqual(self.next_lines()[3],
+                         "U03 the documents: can start" + too.format("U01 and U02"))
         # Any other file they share still holds the later one back.
         self.schedule["units"][2]["files"].append("src/log.py")
         self.assertEqual(self.next_lines()[3],
@@ -568,26 +586,127 @@ class TriageTest(unittest.TestCase):
         self.pr(40, "U01", "MERGED")
         self.assertEqual(self.next_lines()[2], "U02 the log: can start")
 
-    def test_a_unit_may_start_on_top_of_one_open_unit_one_deep(self):
+    def chain(self):
+        """U02 shares a file with U01, and U03 one with U02: each is held back by the one before."""
         units = self.schedule["units"]
         units[1]["files"].append("src/core.py")
         units[2]["files"].append("src/log.py")
+        return units
+
+    def test_a_unit_starts_stacked_on_the_open_unit_that_holds_it_back(self):
+        self.chain()
         self.pr(40, "U01")
         self.pr(39, "U01", "CLOSED")  # closed without a merge: it counts for nothing
         self.pr(38, "U02", sweep="CR2")  # another sweep's unit
         self.assertEqual(self.next_lines(), [
             "CR1: 3 units: 0 merged, 1 open, 1 can start",
             "U01 the limit check: open (#40)",
-            "U02 the log: can start on top of U01 (they share src/core.py); its pull request "
-            "opens after U01 merges",
+            "U02 the log: can start stacked on U01 (they share src/core.py); it goes ready after "
+            "U01 merges",
             "U03 the documents: waits on U02 (they share src/log.py)"])
-        # Begun with no pull request yet, the second is open too, and nothing starts on top of it.
+        # Begun with no pull request yet, the second is open too, and nothing is stacked on it:
+        # its pull request is what says which units its branch holds.
         self.assertEqual(self.next_lines("--started", "U02")[2:], [
-            "U02 the log: started, no pull request yet; its pull request opens after U01 merges",
-            "U03 the documents: waits on U02 (they share src/log.py)"])
+            "U02 the log: started, no pull request yet",
+            "U03 the documents: waits on U02 (they share src/log.py): U02 has no pull request "
+            "yet, and a unit is stacked only on one that has"])
         done = self.run_script("next", "--started", "U07")
         self.assertEqual(done.returncode, 2)
         self.assertIn("--started U07: no such unit", done.stderr)
+        # A unit that depends on an open one is stacked on it as well.
+        self.schedule["units"][2].update(files=["docs/a.md", "docs/b.md"], depends_on=["U01"])
+        self.assertEqual(self.next_lines()[3], "U03 the documents: can start stacked on U01 (it "
+                         "depends on it); it goes ready after U01 merges")
+
+    def test_a_unit_is_stacked_at_any_depth_within_the_open_units(self):
+        units = self.chain()
+        self.pr(40, "U01")
+        self.pr(41, "U02", on=40)
+        self.assertEqual(self.next_lines(), [
+            "CR1: 3 units: 0 merged, 2 open, 1 can start",
+            "U01 the limit check: open (#40)",
+            "U02 the log: open (#41), stacked on U01 (#40)",
+            "U03 the documents: can start stacked on U02, which is stacked on U01 (U02: they "
+            "share src/log.py); it goes ready after U01 and U02 merge"])
+        # It overlaps both: the branch of the upper one holds the lower one's work too.
+        units[0]["files"].append("docs/a.md")
+        self.assertEqual(self.next_lines()[3], "U03 the documents: can start stacked on U02, which "
+                         "is stacked on U01 (U01: they share docs/a.md; U02: they share "
+                         "src/log.py); it goes ready after U01 and U02 merge")
+        # A third level, and a unit that overlaps only the bottom of the stack: it starts on the
+        # bottom unit's own branch, beside the units above it.
+        units.append(unit("U04", "the rest", [19], ["docs/b.md"]))
+        units.append(unit("U05", "the cache", [20], ["tests/test_core.py"]))
+        self.pr(42, "U03", on=41)
+        self.config["open_units"] = 5
+        self.assertEqual(self.next_lines(), [
+            "CR1: 5 units: 0 merged, 3 open, 2 can start",
+            "U01 the limit check: open (#40)",
+            "U02 the log: open (#41), stacked on U01 (#40)",
+            "U03 the documents: open (#42), stacked on U02 (#41)",
+            "U04 the rest: can start stacked on U03, which is stacked on U02, then U01 (U03: they "
+            "share docs/b.md); it goes ready after U01, U02 and U03 merge",
+            "U05 the cache: can start stacked on U01 (they share tests/test_core.py); it goes "
+            "ready after U01 merges"])
+        # Stacked or not, an open unit takes a place: no more are open than the limit.
+        self.config["open_units"] = 4
+        self.assertEqual(self.next_lines()[4:], [
+            "U04 the rest: can start stacked on U03, which is stacked on U02, then U01 (U03: they "
+            "share docs/b.md); it goes ready after U01, U02 and U03 merge",
+            "U05 the cache: waits for a place: the limit is 4 open units"])
+        self.config["open_units"] = 3
+        self.assertEqual(self.next_lines()[4],
+                         "U04 the rest: waits for a place: the limit is 3 open units")
+        # The bottom one merges: the next one up takes the target in, and the stack is one shorter.
+        self.config["open_units"] = 5
+        self.prs[0]["state"] = "MERGED"
+        self.assertEqual(self.next_lines(), [
+            "CR1: 5 units: 1 merged, 2 open, 2 can start",
+            "U01 the limit check: merged (#40)",
+            "U02 the log: open (#41), stacked on #40, which has merged: it takes the target in",
+            "U03 the documents: open (#42), stacked on U02 (#41)",
+            "U04 the rest: can start stacked on U03, which is stacked on U02 (U03: they share "
+            "docs/b.md); it goes ready after U02 and U03 merge",
+            "U05 the cache: can start"])
+
+    def test_a_unit_that_overlaps_open_units_no_one_branch_holds_waits(self):
+        units = self.schedule["units"]
+        units[2]["files"] += ["src/core.py", "src/log.py"]
+        self.pr(40, "U01")
+        # "Stacked on" is read at the start of a line of the description, never from its prose.
+        self.pr(41, "U02", says="It was to be stacked on #40, and started from the target.\n\n")
+        self.assertEqual(self.next_lines(), [
+            "CR1: 3 units: 0 merged, 2 open, 0 can start",
+            "U01 the limit check: open (#40)",
+            "U02 the log: open (#41)",
+            "U03 the documents: waits on U01 (they share src/core.py), U02 (they share "
+            "src/log.py): both are open and neither is stacked on the other, so it can't be "
+            "stacked on both"])
+        # Three of them, two stacked: still no one branch holds all three.
+        units.append(unit("U04", "the rest", [19], ["src/core.py", "src/log.py", "docs/a.md"]))
+        self.pr(42, "U03", on=41)
+        self.config["open_units"] = 4
+        self.assertEqual(self.next_lines()[4], "U04 the rest: waits on U01 (they share "
+                         "src/core.py), U02 (they share src/log.py), U03 (they share docs/a.md and "
+                         "2 more): they are open and no one of them is stacked on all the others, "
+                         "so it can't be stacked on them all")
+        # Once one of them merges, the branch of what is left holds all it overlaps.
+        self.prs[0]["state"] = "MERGED"
+        self.assertEqual(self.next_lines()[4], "U04 the rest: can start stacked on U03, which is "
+                         "stacked on U02 (U02: they share src/log.py; U03: they share docs/a.md "
+                         "and 2 more); it goes ready after U02 and U03 merge")
+
+    def test_a_unit_is_stacked_on_an_open_unit_that_comes_later_in_the_schedule(self):
+        # The third was started out of turn. The first shares a file with it and never starts from
+        # the target beside it; the second, which it holds back, still waits for it to be open.
+        units = self.chain()
+        units[2]["files"].append("src/core.py")
+        self.pr(42, "U03")
+        self.assertEqual(self.next_lines()[1:], [
+            "U01 the limit check: can start stacked on U03 (they share src/core.py); it goes ready "
+            "after U03 merges",
+            "U02 the log: waits on U01 (they share src/core.py)",
+            "U03 the documents: open (#42)"])
 
     def test_no_more_units_are_open_than_the_limit(self):
         self.config["open_units"] = 2
@@ -652,10 +771,49 @@ class TriageTest(unittest.TestCase):
         self.pr(41, "U02", "MERGED")
         self.assertEqual(self.run_script("guard", "U01", "--base", "base").returncode, 0)
         for args, needle in ((("guard", "U01"), "guard: <unit> --base <ref>"),
-                             (("guard", "U09", "--base", "base"), "guard U09: no such unit")):
+                             (("guard", "U09", "--base", "base"), "guard U09: no such unit"),
+                             (("guard", "U01", "--base", "base", "--on", "U09"),
+                              "guard U01 --on U09: no such unit"),
+                             (("guard", "U01", "--base", "base", "--on", "U01"),
+                              "guard U01 --on U01: a unit is stacked on another"),
+                             (("next", "--on", "U01"), "next takes no --on")):
             done = self.run_script(*args)
             self.assertEqual(done.returncode, 2)
             self.assertIn(needle, done.stderr)
+
+    def test_guard_lets_a_stacked_unit_change_the_files_of_the_units_below_it(self):
+        self.schedule["units"][2]["files"].append("src/log.py")
+        self.commit("base", **{"src/core.py": "a\n", "src/log.py": "a\n"})
+        subprocess.run(["git", "-C", str(self.root), "branch", "base"], check=True)
+        self.commit("the fix", **{"src/core.py": "b\n", "src/log.py": "b\n"})
+        self.pr(41, "U02")
+        stop = "stop: src/log.py is outside U01's plan, and {} it"
+        done = self.run_script("guard", "U01", "--base", "base")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(stop.format("U02, U03 claim"), done.stderr)
+        # Stacked on the one, it still stops for the other, which runs beside it.
+        done = self.run_script("guard", "U01", "--base", "base", "--on", "U02")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(stop.format("U03 claims"), done.stderr)
+        # Stacked on both, one below the other: named by --on, or by its own pull request.
+        self.prs.clear()
+        self.pr(41, "U02", on=42)
+        self.pr(42, "U03")
+        added = "outside the plan: src/log.py (U02 and U03 claim it, and U01 is stacked on them: " \
+            "add it to U01's files)"
+        done = self.run_script("guard", "U01", "--base", "base", "--on", "U02")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(added, done.stdout)
+        self.assertEqual(self.run_script("guard", "U01", "--base", "base").returncode, 1)
+        self.pr(43, "U01", on=41)
+        done = self.run_script("guard", "U01", "--base", "base")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(added, done.stdout)
+        # A unit with no pull request open is no unit to be stacked on.
+        self.prs.clear()
+        done = self.run_script("guard", "U01", "--base", "base", "--on", "U02")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn(stop.format("U02, U03 claim"), done.stderr)
 
     def test_guard_lets_a_shared_file_into_a_units_changes(self):
         self.commit("base", **{"src/core.py": "a\n", "src/log.py": "a\n"})

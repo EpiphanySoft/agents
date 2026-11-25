@@ -6,7 +6,7 @@ them, and say which of its work units can start. See SKILL.md beside this script
     triage.py sorted [<file> ...] [--step <step>,...] [--sweep CR1] [--config ...] [--pad review/<N>]
     triage.py check       [--sweep CR1] [--config ...] [--schedule <file>] [--offline]
     triage.py next        [--sweep CR1] [--config ...] [--schedule <file>] [--started U08,U09]
-    triage.py guard <unit> --base <ref> [--sweep CR1] [--config ...] [--schedule <file>]
+    triage.py guard <unit> --base <ref> [--on <unit>] [--sweep CR1] [--config ...] [--schedule <file>]
     triage.py unscheduled [--sweep CR1] [--config ...] [--schedule <file>]
 
 The sweep is <prefix><N> (CR1): named by --sweep, else by the branch code-review-<N>, else by the
@@ -35,16 +35,21 @@ shared_at units or more) and, unless --offline, against GitHub (every open findi
 aside). It notes a file that many units change and the schedule doesn't list as shared, and a
 dependency on a finding no unit holds.
 
-`next` says, for each unit in order, whether it is merged, open, can start, can start on top of one
-open unit, or what it waits on. A unit waits on an earlier unit it depends on, one that holds a
-finding one of its own depends on, and one it shares a file with; two units that share only the
-schedule's shared files don't wait, unless a finding of one is related to, or depends on, a finding
-of the other in such a file. A unit's state is its pull request's, found by the marker
-`<!-- remediation CR1 U07 -->` in its description, and --started names units begun with no pull
-request yet.
+`next` says, for each unit in order, whether it is merged, open (and what it is stacked on), can
+start, can start stacked on an open unit, or what it waits on. A unit is held back by an earlier
+unit it depends on, one that holds a finding one of its own depends on, and one it shares a file
+with; two units that share only the schedule's shared files don't hold one another back, unless a
+finding of one is related to, or depends on, a finding of the other in such a file. A unit waits
+while a unit that holds it back is neither merged nor open. It starts stacked when it overlaps an
+open unit (one that holds it back, or one it shares a file with, a shared file included): on the
+branch that holds every open unit it overlaps, at any depth. It waits when no branch holds them
+all: two open units, neither stacked on the other. A unit's state is its pull request's, found by the marker
+`<!-- remediation CR1 U07 -->` in its description; what an open unit is stacked on is that
+description's line "Stacked on #N"; and --started names units begun with no pull request yet.
 
 `guard` compares the files a unit's branch changed since <ref> with the unit's plan, and stops
-(exit 1) on a file outside it that another unmerged unit claims, unless it is a shared file.
+(exit 1) on a file outside it that another unmerged unit claims, unless it is a shared file or the
+unit is stacked on every unit that claims it (--on <unit>, or its pull request's "Stacked on #N").
 `unscheduled` lists the open findings the schedule doesn't hold.
 
 It reads GitHub through the gh CLI and writes nothing there. Python 3 standard library, and the
@@ -74,6 +79,8 @@ FINDINGS_FILE = "findings.json"
 SORTED_FILE = "sorted.json"
 DECIDED_FILE = "decided.jsonl"
 UNIT_MARKER = re.compile(r"<!-- remediation (\S+) (\S+) -->")
+# A stacked unit's description says so on a line of its own: "Stacked on #40: its own change ...".
+STACKED_ON = re.compile(r"(?im)^[\s>*_-]*stacked on #([0-9]+)")
 SEVERITY = re.compile(r"^(?:\[[^\]\n]*\] )?severity (High|Med|Low)\b")
 SEVERITIES = ("High", "Med", "Low")
 
@@ -182,19 +189,40 @@ def to_schedule(config, findings):
 
 
 def unit_states(config, name):
-    """{unit id: {"state": "open" or "merged", "pr": n}}, from the pull requests whose description
-    carries the unit's marker. One closed without a merge counts for nothing."""
+    """{unit id: {"state": "open" or "merged", "pr": n, "on": m, "on_merged": bool}}, from the pull
+    requests whose description carries the unit's marker. One closed without a merge counts for
+    nothing. "on" is the pull request the description says the unit is stacked on ("Stacked on
+    #m"), or None, and "on_merged" whether that one has merged."""
     out = fr.run(["gh", "pr", "list", "--repo", config["repo"], "--state", "all", "--limit", "1000",
                   "--json", "number,state,body"], "gh pr list")
+    prs = json.loads(out)
+    merged = {pr["number"] for pr in prs if pr["state"].lower() == "merged"}
     states = {}
-    for pr in json.loads(out):
+    for pr in prs:
         state = pr["state"].lower()
         if state == "closed":
             continue
-        for m in UNIT_MARKER.finditer(pr.get("body") or ""):
+        body = pr.get("body") or ""
+        on = STACKED_ON.search(body)
+        on = int(on.group(1)) if on else None
+        for m in UNIT_MARKER.finditer(body):
             if m.group(1) == name and (m.group(2) not in states or state == "merged"):
-                states[m.group(2)] = {"state": state, "pr": pr["number"]}
+                states[m.group(2)] = {"state": state, "pr": pr["number"], "on": on,
+                                      "on_merged": on in merged}
     return states
+
+
+def stack_below(uid, states):
+    """The open units whose work a unit's branch holds below its own, nearest first: the unit its
+    pull request says it is stacked on, the unit that one is stacked on, and so on down. A unit
+    with no pull request yet names none, and a merged one ends the stack: the target holds it."""
+    by_pr = {s["pr"]: i for i, s in states.items() if s.get("pr")}
+    below, at = [], uid
+    while True:
+        at = by_pr.get(states.get(at, {}).get("on"))
+        if at is None or at == uid or at in below or states[at]["state"] != "open":
+            return below
+        below.append(at)
 
 
 # ---- gather ----
@@ -412,7 +440,7 @@ def problems_within(schedule, config):
     for f, ids in sorted(changed.items()):
         if len(ids) >= at and f not in shared:
             notes.append(f"{f} is changed by {len(ids)} units ({', '.join(ids)}) and is not listed "
-                         "as shared: they run one after another")
+                         "as shared: they start in the schedule's order")
     for k, u in enumerate(units):
         for d in u.get("depends_on", []):
             if d not in order:
@@ -514,15 +542,33 @@ def waits(schedule, merged):
     return out
 
 
+def sharing(a, b, shared):
+    """How two units' files overlap, in words, or None when they share none. The files that aren't
+    shared ones come first; shared ones are named as such."""
+    common = sorted(set(a["files"]) & set(b["files"]))
+    if not common:
+        return None
+    own = [f for f in common if f not in shared]
+    more = len(own or common) - 1
+    return f"they share {(own or common)[0]}" + ("" if own else ", a shared file") + \
+        (f" and {more} more" if more else "")
+
+
+def listed(names):
+    """"U01", "U01 and U02", "U01, U02 and U03"."""
+    names = list(names)
+    return " and ".join(([", ".join(names[:-1])] if names[:-1] else []) + names[-1:])
+
+
 def cmd_next(config, schedule, started):
     units = schedule["units"]
     ids = {u["id"] for u in units}
     for uid in started:
         if uid not in ids:
             raise fr.Refused(f"--started {uid}: no such unit")
-    states = unit_states(config, schedule["sweep"])
+    states = {i: s for i, s in unit_states(config, schedule["sweep"]).items() if i in ids}
     for uid in started:
-        states.setdefault(uid, {"state": "started", "pr": None})
+        states.setdefault(uid, {"state": "started", "pr": None, "on": None, "on_merged": False})
     merged = {i for i in ids if states.get(i, {}).get("state") == "merged"}
     opened = {i for i in ids if states.get(i, {}).get("state") in ("open", "started")}
     label = config["refine_label"]
@@ -530,55 +576,84 @@ def cmd_next(config, schedule, started):
               if f["state"] == "open" and label in f["labels"]}
     why = waits(schedule, merged)
     shared = set(schedule.get("shared_files", []))
+    below = {i: stack_below(i, states) for i in opened}
     limit = config["open_units"]
-    room, can = limit - len(opened), 0
+    room, starting = limit - len(opened), []
     lines = []
     for u in units:
         uid, blockers = u["id"], why[u["id"]]
-        on_top = ""
-        if blockers:
-            on_top = "; its pull request opens after " + " and ".join(blockers) + " merge" + \
-                ("s" if len(blockers) == 1 else "")
         if uid in merged:
             line = f"merged (#{states[uid]['pr']})"
         elif uid in opened:
-            pr = states[uid]["pr"]
-            line = (f"open (#{pr})" if pr else "started, no pull request yet") + \
-                (on_top if not pr else "")
+            pr, on = states[uid]["pr"], states[uid]["on"]
+            line = f"open (#{pr})" if pr else "started, no pull request yet"
+            if below[uid]:
+                line += f", stacked on {below[uid][0]} (#{on})"
+            elif on:
+                line += f", stacked on #{on}" + (", which has merged: it takes the target in"
+                                                 if states[uid]["on_merged"] else "")
         else:
             held = [n for n in u["findings"] if n in refine]
-            only = next(iter(blockers)) if len(blockers) == 1 else None
+            # The open units it overlaps, in the schedule's order: those that hold it back, and any
+            # it shares a file with, a shared file included. It starts on the branch that holds
+            # them all, so they must be one stack: one of them, with the others below it.
+            need = {e["id"]: blockers.get(e["id"]) or sharing(e, u, shared) for e in units
+                    if e["id"] in opened}
+            need = {i: w for i, w in need.items() if w}
+            tips = [t for t in need if set(need) <= {t, *below[t]}]
+            bare = [i for i in need if not states[i]["pr"]]
             if held:
                 line = "waits on the owner: " + ", ".join(f"#{n}" for n in held) + \
                     f" carr{'ies' if len(held) == 1 else 'y'} the {label} label"
-            elif blockers and not (only in opened and not why[only]):
+            elif set(blockers) - opened:
                 line = "waits on " + ", ".join(f"{i} ({w})" for i, w in blockers.items())
+            elif bare or (need and not tips):
+                line = "waits on " + ", ".join(f"{i} ({w})" for i, w in need.items()) + ": "
+                if bare:
+                    line += (f"{listed(bare)} {'has' if len(bare) == 1 else 'have'} no pull request "
+                             "yet, and a unit is stacked only on one that has")
+                elif len(need) == 2:
+                    line += ("both are open and neither is stacked on the other, so it can't be "
+                             "stacked on both")
+                else:
+                    line += ("they are open and no one of them is stacked on all the others, so it "
+                             "can't be stacked on them all")
             elif room <= 0:
                 line = f"waits for a place: the limit is {limit} open units"
             else:
-                room, can = room - 1, can + 1
-                # The open units it shares a shared file with: it takes the target in as they merge.
-                beside = [e["id"] for e in units if e["id"] in opened and e["id"] not in blockers
-                          and set(e["files"]) & set(u["files"]) & shared]
-                line = "can start" + (f" on top of {only} ({blockers[only]}){on_top}"
-                                      if only else "")
-                if beside:
-                    line += (f"; it shares a shared file with {', '.join(beside)} and takes the "
-                             "target in when " + ("that merges" if len(beside) == 1
-                                                  else "each merges"))
+                room -= 1
+                line = "can start"
+                if tips:
+                    tip, under = tips[0], below[tips[0]]
+                    line += f" stacked on {tip}" + \
+                        (f", which is stacked on {', then '.join(under)}" if under else "") + \
+                        (f" ({need[tip]})" if len(need) == 1 and not under else
+                         " (" + "; ".join(f"{i}: {w}" for i, w in need.items()) + ")") + \
+                        f"; it goes ready after {listed([*reversed(under), tip])} " + \
+                        ("merge" if under else "merges")
+                # Others that can start now and share a file with it (a shared one, or they would
+                # hold it back): once one of them is open, the other is stacked on it.
+                too = [e["id"] for e in starting if set(e["files"]) & set(u["files"])]
+                if too:
+                    line += (f"; it shares a shared file with {listed(too)}, which can start too: "
+                             "the later to start is stacked on the earlier")
+                starting.append(u)
         lines.append(f"{uid} {u['name']}: {line}")
     print(f"{schedule['sweep']}: {len(units)} units: {len(merged)} merged, {len(opened)} open, "
-          f"{can} can start")
+          f"{len(starting)} can start")
     print("\n".join(lines))
     return 0
 
 
 # ---- guard ----
 
-def cmd_guard(config, schedule, path, uid, base):
+def cmd_guard(config, schedule, path, uid, base, on):
     unit = next((u for u in schedule["units"] if u["id"] == uid), None)
     if unit is None:
         raise fr.Refused(f"guard {uid}: no such unit")
+    if on is not None and (on == uid or all(u["id"] != on for u in schedule["units"])):
+        raise fr.Refused(f"guard {uid} --on {on}: " + ("a unit is stacked on another"
+                                                       if on == uid else "no such unit"))
     out = fr.run(["git", "diff", "--name-only", f"{base}...HEAD"], f"git diff {base}...HEAD")
     changed = [line for line in out.splitlines() if line]
     outside = [f for f in changed if f not in set(unit["files"]) | {path.as_posix()}]
@@ -586,16 +661,26 @@ def cmd_guard(config, schedule, path, uid, base):
         print(f"{uid}: all {len(changed)} changed files are in its plan")
         return 0
     states = unit_states(config, schedule["sweep"])
+    # The open units it is stacked on: --on's and those below it, or what its pull request says.
+    if on is None:
+        under = stack_below(uid, states)
+    else:
+        under = [on, *stack_below(on, states)] if states.get(on, {}).get("state") == "open" else []
     stopped = False
     for f in outside:
         claimed = [o["id"] for o in schedule["units"] if o["id"] != uid and f in o["files"]
                    and states.get(o["id"], {}).get("state") != "merged"]
+        beside = [i for i in claimed if i not in under]
         if f in schedule.get("shared_files", []):
             print(f"outside the plan: {f} (a shared file: add it to {uid}'s files)")
-        elif claimed:
+        elif beside:
             stopped = True
-            print(f"stop: {f} is outside {uid}'s plan, and {', '.join(claimed)} "
-                  f"claim{'s' if len(claimed) == 1 else ''} it", file=sys.stderr)
+            print(f"stop: {f} is outside {uid}'s plan, and {', '.join(beside)} "
+                  f"claim{'s' if len(beside) == 1 else ''} it", file=sys.stderr)
+        elif claimed:
+            print(f"outside the plan: {f} ({listed(claimed)} claim"
+                  f"{'s' if len(claimed) == 1 else ''} it, and {uid} is stacked on "
+                  f"{'it' if len(claimed) == 1 else 'them'}: add it to {uid}'s files)")
         else:
             print(f"outside the plan: {f} (no other unmerged unit claims it: add it to {uid}'s "
                   "files)")
@@ -632,6 +717,8 @@ def main(argv=None):
     parser.add_argument("--pad", help="gather, sorted: the review's work pad (default review/<N>)")
     parser.add_argument("--schedule", help="the schedule file (default: the config's schedule path)")
     parser.add_argument("--base", help="guard: the commit the unit's branch is compared with")
+    parser.add_argument("--on", help="guard: the unit this one is stacked on, while its own pull "
+                        "request isn't open to say so")
     parser.add_argument("--started", default="", help="next: the ids of units begun with no pull "
                         "request yet, separated by commas")
     parser.add_argument("--offline", action="store_true",
@@ -644,6 +731,8 @@ def main(argv=None):
         steps = [s for s in args.step.split(",") if s]
         if steps and args.command != "sorted":
             raise fr.Refused(f"{args.command} takes no --step")
+        if args.on and args.command != "guard":
+            raise fr.Refused(f"{args.command} takes no --on")
         if args.command == "sorted" and (args.args or args.pad):
             pad = Path(args.pad or ".")  # the files named, or the pad named: no sweep is needed
             if not args.args and not (pad / "triage").is_dir():
@@ -671,7 +760,7 @@ def main(argv=None):
         if len(args.args) != 1 or not args.base:
             raise fr.Refused("guard: <unit> --base <ref>, the unit's id and the commit its branch "
                              "is compared with")
-        return cmd_guard(config, schedule, path, args.args[0], args.base)
+        return cmd_guard(config, schedule, path, args.args[0], args.base, args.on)
     except fr.Refused as e:
         print(f"refused: {e}", file=sys.stderr)
         return 2
