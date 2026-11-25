@@ -157,7 +157,10 @@ Only after confirm passes, in this order:
 Every update to me about an open PR ends with where its merge stands, as its last line:
 
 - `Merge waits on ...`, naming each thing still in front of my pressing merge (a CI run, an answer
-    from me, a fix, a sign-off), in the order it will happen.
+    from me, a fix, a sign-off), in the order it will happen, and ending with how long until only
+    my merge is left and the time that is: `Merge waits on CI, then sign-off. ETA 1h 43m (3:30 PM)`.
+    The time follows Message timestamps, without naming its zone. Time waiting on my answer isn't
+    counted: the ETA then runs from my giving it (`ETA 25m after your answer`).
 - `Merge is yours.` when nothing is left but my approving the PR and merging it.
 
 With several PRs open, one line each, named by number.
