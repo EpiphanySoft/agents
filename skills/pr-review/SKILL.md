@@ -32,6 +32,11 @@ skills' commit.
 
 - **The commit** is the pull request's head. **The delta** runs from the merge base to it:
     `git diff -M <merge-base>..<head>`.
+- **A stacked pull request** holds another's commits below its own, and says so in its description:
+    "Stacked on #N: its own change starts after commit X", where X is #N's head it was last on.
+    Its delta runs from X, `git diff -M X..<head>`, so the pass reads only its own commits, and X
+    stands for the merge base wherever this skill names one. Once #N has merged and the pull
+    request has taken the target in, the line is gone and the merge base serves again.
 - **Units** cover only the areas the diff touches, cut as the review skill's map cuts them. Sensitive
     code is read whole if the diff touches any of it.
 - **Requirements** the pull request changes, or that its code cites, are read at the head: a pull
@@ -135,6 +140,8 @@ The next pass reviews from the **last reviewed head** to the new head, leaving o
 merge of the target. One way to get only the author's change: `git merge-tree --write-tree <last head>
 <new merge base>` gives the last head with the target taken in, and its diff to the new head is the
 author's work since; where that merge conflicts, read the conflicted files' whole pull request diff.
+A stacked pull request also leaves out what came in with a merge of the pull request it is stacked
+on: the X of its description is then the head it took in, and stands for the new merge base.
 
 - **Every earlier finding is re-checked** against the new code, and the pass replies on its thread:
     "fixed in <sha>" or "still holds", with the evidence. Earlier exploitable findings are re-checked

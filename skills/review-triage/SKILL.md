@@ -1,6 +1,6 @@
 ---
 name: review-triage
-description: "Turn a posted code review's findings into an ordered schedule of work units, one pull request each, and run it. Use when the owner asks what follows a review, to triage or schedule its findings, which unit is next or can start, or how to run a sweep's fixes. Covers gathering the open findings, sorting each one (ready, choice, check, not now), the owner's choices asked up front, batching by the files that change together, the schedule file and its checks, what may run side by side, the standing rules for what comes up mid-work, the question, refine and dismiss labels, a pull request's merge-readiness, and changing the schedule."
+description: "Turn a posted code review's findings into an ordered schedule of work units, one pull request each, and run it. Use when the owner asks what follows a review, to triage or schedule its findings, which unit is next or can start, or how to run a sweep's fixes. Covers gathering the open findings, sorting each one (ready, choice, check, not now), the owner's choices asked up front, batching by the files that change together, the schedule file and its checks, what may run side by side or stacked, the standing rules for what comes up mid-work, the question, refine and dismiss labels, a pull request's merge-readiness, and changing the schedule."
 ---
 
 # Review triage
@@ -13,10 +13,10 @@ It serves three goals, and every choice the coordinator makes while scheduling i
 
 1. **The fewest trips back to the owner.** What the owner must decide is asked up front, together.
     What comes up later follows a standing rule, or is set aside without stopping the work.
-2. **As far as possible within the limits.** Units run side by side wherever their files allow and
-    the project's limits permit.
-3. **No collisions.** Two units that change the same file never run side by side, unless the file
-    is one the schedule lists as shared and their findings in it are unrelated (*Shared files*).
+2. **As far as possible within the limits.** Units run side by side wherever their files allow,
+    and stacked where they don't, within the project's limits.
+3. **No collisions.** Two units that change the same file never run side by side: the second to
+    start waits for the first to merge, or starts stacked on its branch (*What can start*).
 
 The skill has two parts. **Triage** ends at a schedule the owner has approved; it changes no code and
 no requirement. **Running the schedule** is how each unit goes from branch to merge, and how the
@@ -78,7 +78,8 @@ sort the findings of step CR4.3, the first 40, on <model> at <effort>. Start fro
 
 ```
 CR4's schedule (docs/remediation/CR4-schedule.json), with the review-triage skill:
-run the unit U07 from <the target branch, or the unit it starts on>, on <model> at <effort>.
+run the unit U07 from <the target branch, or the branch of the unit it is stacked on>, on <model>
+at <effort>.
 ```
 
 Sort pieces run several at once, within the project's machine limits; units as *What can start*
@@ -272,20 +273,22 @@ Inside a unit, findings are fixed most severe first.
 ## Shared files
 
 Some files are changed by many units: a module every screen calls, a test file many fixes add to.
-Held to one unit at a time, such a file turns the schedule into one long chain. So the schedule
-lists its **shared files**: the files that `shared_at` units or more change (3 by default), test
-files included.
+Held to the schedule's order, such a file turns the schedule into one long chain, in which no unit
+starts before the one ahead of it has. So the schedule lists its **shared files**: the files that
+`shared_at` units or more change (3 by default), test files included.
 
-- Two units that share only shared files may run side by side, unless a finding of one is related
-    to, or depends on, a finding of the other in such a file (the records' `related` and
-    `depends_on`): those change the same code.
-- Every other file keeps the rule: two units that change it never run side by side.
-- Two units side by side on a shared file can still conflict now and then. The later one to merge
-    settles it, with no trip to the owner (*A unit, from branch to merge*).
+- Two units that share only shared files don't hold one another back: either may start first.
+    Unless a finding of one is related to, or depends on, a finding of the other in such a file
+    (the records' `related` and `depends_on`): those change the same code, and the later unit is
+    held back like any other.
+- Every other file keeps the order: of two units that change it, the later is held back until the
+    earlier is open or merged.
+- A shared file is still a file. Two open units never run side by side on one: the second to start
+    is stacked on the first (*Stacked units*). Side by side, they would conflict at every merge.
 
 `check` refuses a listed file that fewer units change, and notes a file that many units change and
-the list leaves out: the coordinator may leave one out, to keep its units one after another. The
-owner sees the list when approving the schedule.
+the list leaves out: the coordinator may leave one out, to keep its units in the schedule's order.
+The owner sees the list when approving the schedule.
 
 ## The schedule
 
@@ -299,8 +302,9 @@ The schedule is one JSON file per sweep, at the project's `schedule` path, check
 - **`set_aside`**: the open findings no unit holds, each with the reason.
 
 It holds the plan and nothing else. **Progress is read from GitHub**: a unit is open while its pull
-request is, and done when that is merged; a finding is done when its issue is closed. So the file
-never goes stale, and no pull request is made to tick a box.
+request is, stacked on the unit that pull request's description names, and done when it is merged; a
+finding is done when its issue is closed. So the file never goes stale, and no pull request is made
+to tick a box.
 
 `triage.py check` holds a schedule to its rules: every open finding is in exactly one unit or set
 aside; every finding in a unit has its record, and is ready or needs a check; a unit's files hold its
@@ -315,36 +319,84 @@ the approval, and Part 1 ends there.
 
 ## What can start
 
+A unit is **held back** by an earlier unit that isn't merged yet when it depends on it, when that
+unit holds a finding one of its own depends on, or when the two share a file, shared files aside
+(*Shared files*).
+
 A unit may start when all of these hold:
 
-1. every earlier unit that shares a file with it is merged, shared files aside (*Shared files*);
-2. every unit it depends on is merged, and every earlier unit that holds a finding one of its own
-    depends on;
+1. every unit that holds it back is merged or open;
+2. one branch holds every open unit it overlaps (*Stacked units*);
 3. none of its findings carries the `refine` label;
 4. fewer than `open_units` units are open.
 
-`triage.py next` computes it, the same in every session: for each unit, whether it is merged, open,
-can start, or what it waits on. No lane is assigned by hand.
+`triage.py next` computes it, the same in every session: for each unit, whether it is merged, open
+and stacked on which unit, can start from the target branch, can start stacked and on which unit, or
+what it waits on. No lane is assigned by hand.
 
-**One deep.** To use the time a review takes, a unit held back by exactly one unit, which is open and
-itself sits on nothing unmerged, may start on top of that unit's branch. Its pull request opens only
-after the first has merged and it has taken the target branch in by a merge, never a rebase.
+## Stacked units
+
+A unit **overlaps** an open unit that holds it back, and an open unit it shares a file with, a
+shared file included, whichever of the two comes first in the schedule. A unit that overlaps no open
+unit starts from the target branch. One that does never starts beside that unit: it starts
+**stacked**, on that unit's branch, with that unit's work below its own. The unit it is stacked on
+is its **parent**.
+
+- **Any depth.** A stacked unit can be a parent in turn. The only limit is `open_units`: a stacked
+    unit is open like any other.
+- **One branch.** A unit that overlaps several open units starts on the one whose branch holds the
+    others: the top of their stack. When no branch holds them all, as with two open units neither of
+    which is stacked on the other, the unit waits until one of them merges.
+- **Its pull request opens early**, as a draft against the target branch, so CI and review run
+    while its parent is still open. Its description says what it is stacked on, and from which
+    commit its own change runs (*A unit, from branch to merge*). A unit is stacked only on a unit
+    whose pull request is open: `next` reads the stack from the descriptions.
+- **The owner merges in order**, a stack from the bottom up. Each time the bottom unit merges, the
+    one above it takes the target branch in, shows only its own diff, and can go ready.
+
+Why: side by side on a file they both change, two units conflict at every merge, and the later one
+settles each conflict against work it never saw. Stacked, the later unit is written on top of the
+earlier one's work, so nothing is left to settle but the order of the merges.
 
 ## A unit, from branch to merge
 
-1. **Start** from the target branch (or on top of the one open unit, as above). The unit's session
-    reads the unit's entry in the schedule, its findings' issues and the project's own rules for a
-    fix. It fixes most severe first.
+1. **Start** from the target branch, or stacked: from the branch of the open unit `next` names
+    (*Stacked units*). The unit's session reads the unit's entry in the schedule, its findings'
+    issues and the project's own rules for a fix. It fixes most severe first.
 2. **The guard**, before the pull request opens and before each push after: `triage.py guard <unit>
-    --base <ref>` compares the files the branch changed with the unit's `files`. A file outside the
-    plan that another unmerged unit claims stops the unit until the schedule is corrected, unless it
-    is a shared file. A shared file, or a file no other unit claims, is added to the unit's `files`.
-3. **The pull request** opens as a draft, with the sweep label, a "Closes #n" line for each finding
-    it fixes, and the unit's marker at the end of its description: `<!-- remediation CR1 U07 -->`.
+    --base <ref>` compares the files the branch changed with the unit's `files`. The base is the
+    target branch; for a stacked unit it is its parent's branch, with `--on <parent>` until its own
+    pull request is open to say so. A file outside the plan that another unmerged unit claims stops
+    the unit until the schedule is corrected, unless it is a shared file, or the unit is stacked on
+    every unit that claims it. Such a file, or one no other unit claims, is added to the unit's
+    `files`.
+3. **The pull request** opens as a draft against the target branch, with the sweep label, a
+    "Closes #n" line for each finding it fixes, and the unit's marker at the end of its
+    description: `<!-- remediation CR1 U07 -->`. A stacked unit's opens early, with its first push,
+    and its description carries one more line, on its own, where #N is its parent's pull request
+    and X the parent's head it was last on:
+
+    ```
+    Stacked on #N: its own change starts after commit X.
+    ```
+
+    - Until #N merges the pull request's diff shows the parent's change too. The unit's own
+        change is `X..<head>`, and that is all a `pr-review` pass of it reads: the pass takes X as
+        its base (the `pr-review` skill, *The pass's input*).
+    - When the parent gets new commits, such as its review's fixes, the unit takes the parent's
+        branch in by a merge, and X in its description becomes the head it took in.
+    - **Once the parent merges**, the unit takes the target branch in by a merge, never a rebase.
+        The squash brings the parent's change a second time with the same content, so the merge
+        is clean wherever the unit left the parent's lines as they were. Where it changed them
+        further, git reports a conflict, and the unit's own side is the answer: having taken in
+        the parent's last commit, it already holds the parent's change. The pull request then
+        shows only the unit's own diff, and the "Stacked on" line comes out of its description.
+        A unit stacked on this one takes this unit's branch in the same way, and stays a draft
+        until this one merges.
 4. **Ready for the owner** when all of these hold:
-    - it has taken the target branch in, by a merge, since the last unit it shares a shared file
-        with merged; a conflict in that file was the unit's to resolve, and the description says
-        what was resolved;
+    - nothing it was stacked on is still open, and it has taken the target branch in, by a merge,
+        since the last merge of a unit it was stacked on or shares a file with; a conflict in that
+        merge was the unit's to resolve, and the description says what was resolved;
     - CI is green, on that merge where there was one;
     - a `pr-review` pass has run on a different model from the one that did the work, and everything
         it raised is fixed or answered;
@@ -353,8 +405,8 @@ after the first has merged and it has taken the target branch in by a merge, nev
     - the description opens with **Needs your eye**: only the commits that change what the user
         sees or what a requirement says, the small interface the sort left to the implementer
         among them.
-5. **The owner merges**, every unit. After the merge: confirm and cleanup (the shared `CLAUDE.md` PR
-    terms), then `next`.
+5. **The owner merges**, every unit, and a stack from the bottom up. After the merge: confirm and
+    cleanup (the shared `CLAUDE.md` PR terms), then `next`.
 
 **Where the merge stands.** Every update to the owner about a unit's pull request ends with it, as
 the shared `CLAUDE.md` says (*PR updates*): "Merge waits on ...", naming what is still to come of
@@ -418,7 +470,7 @@ python3 <skill>/triage.py gather      [--sweep CR1] [--pad review/<N>]
 python3 <skill>/triage.py sorted [<file> ...] [--step <area>,...] [--sweep CR1] [--pad review/<N>]
 python3 <skill>/triage.py check       [--sweep CR1] [--schedule <file>] [--offline]
 python3 <skill>/triage.py next        [--sweep CR1] [--schedule <file>] [--started U08,U09]
-python3 <skill>/triage.py guard <unit> --base <ref> [--sweep CR1] [--schedule <file>]
+python3 <skill>/triage.py guard <unit> --base <ref> [--on <unit>] [--sweep CR1] [--schedule <file>]
 python3 <skill>/triage.py unscheduled [--sweep CR1] [--schedule <file>]
 ```
 
@@ -426,7 +478,10 @@ python3 <skill>/triage.py unscheduled [--sweep CR1] [--schedule <file>]
     project holds.
 - **A unit's state** is its pull request's, found by the unit's marker in its description; one
     closed without a merge counts for nothing. `--started` names units begun with no pull request
-    yet, such as one started on top of another.
+    yet.
+- **What an open unit is stacked on** is its description's line "Stacked on #N", read at the start
+    of a line, where #N is another open unit's pull request. A unit with no pull request yet names
+    none, so nothing is stacked on it until it has one.
 - **`gather`** writes `findings.json`, and the same findings a step as `findings-<area>.json`.
 - **`sorted`** reads the work pad's `triage/` folder: `findings.json`, every `sort-*.jsonl` and
     `check*.jsonl`, and `decided.jsonl` when there is one. With files named it checks their lines
@@ -434,8 +489,13 @@ python3 <skill>/triage.py unscheduled [--sweep CR1] [--schedule <file>]
     check, each step named by its area or its issue's number, and writes nothing.
 - **`check`** prints a note for what is worth a look and no problem: a file many units change that
     isn't listed as shared, and a dependency on a finding no unit holds.
-- **`next`** says of a unit that can start which open units it shares a shared file with: it takes
-    the target in as each merges.
+- **`next`** says of a unit that can start stacked which unit's branch it starts on, the units
+    below that one, why it overlaps them, and whose merges come before it can go ready. Of an open
+    unit it says what it is stacked on, and when that has merged, that it takes the target in. Of
+    two units that can start and share a shared file, it says the later to start is stacked on
+    the earlier.
+- **`guard --on <unit>`** names the unit this one is stacked on, for the runs before its own pull
+    request is open. It doesn't stop for a file that only that unit, and the units below it, claim.
 - **`check --offline`** checks the schedule against its schema and itself, without GitHub.
 - **Exit status**: 0 done; 1 the sort or the schedule has problems, a guard stopped, or a `gh` or
     `git` call failed; 2 refused (a bad config, schedule or argument).
